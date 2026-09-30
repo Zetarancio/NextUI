@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include "defines.h"
 #include "utils.h"
+#include "palette.h"
 
 NextUISettings settings = {0};
 
@@ -523,6 +524,30 @@ void CFG_init(FontLoad_callback_t cb, ColorSet_callback_t ccb)
         fclose(file);
     }
 
+    uint32_t before[7];
+    int i, persist = 0;
+    /* Empty name + stock NextUI magenta is an unmigrated card, not Custom. */
+    if (settings.paletteName[0] == '\0' &&
+        (settings.color2_255 == 0x9B2257FFU)) {
+        setPaletteNameRaw(CFG_DEFAULT_PALETTE_NAME);
+        persist = 1;
+    }
+    /* Named palette files win over independently-saved colorN=. */
+    for (i = 0; i < 7; i++)
+        before[i] = CFG_getColor(i + 1);
+    if (PALETTE_reapplyCurrent()) {
+        for (i = 0; i < 7; i++) {
+            if (before[i] != CFG_getColor(i + 1)) {
+                persist = 1;
+                break;
+            }
+        }
+    }
+    if (settings.defaultView == SCREEN_GAMESWITCHER) {
+        settings.defaultView = SCREEN_GAMELIST;
+        persist = 1;
+    }
+
     // load gfx related stuff until we drop the indirection
     CFG_setColor(1, CFG_getColor(COLOR_MAIN));
     CFG_setColor(2, CFG_getColor(COLOR_ACCENT));
@@ -534,6 +559,8 @@ void CFG_init(FontLoad_callback_t cb, ColorSet_callback_t ccb)
     // avoid reloading the font if not neccessary
     if (!fontLoaded)
         CFG_setFontFile(CFG_getFontFile());
+    if (persist)
+        CFG_sync();
 }
 
 const char* CFG_getFontFile(void)
@@ -1583,10 +1610,7 @@ void CFG_sync(void)
     char settingsPath[MAX_PATH];
     const char *shared_userdata = getenv("SHARED_USERDATA_PATH");
     if (!shared_userdata || !shared_userdata[0])
-    {
-        printf("[CFG] SHARED_USERDATA_PATH is not set!\n");
-        return;
-    }
+        shared_userdata = SHARED_USERDATA_PATH;
 
     snprintf(settingsPath, sizeof(settingsPath), "%s/minuisettings.txt", shared_userdata);
     FILE *file = fopen(settingsPath, "w");
@@ -1667,6 +1691,8 @@ void CFG_sync(void)
     fprintf(file, "gameSwitcherCurtain=%i\n", settings.gameSwitcherCurtain);
     fprintf(file, "inputPromptStyle=%i\n", settings.inputPromptStyle);
 
+    fflush(file);
+    fsync(fileno(file));
     fclose(file);
 }
 
