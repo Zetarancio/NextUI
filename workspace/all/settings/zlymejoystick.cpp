@@ -835,28 +835,6 @@ void Zlyme_appendJoystickItem(std::vector<AbstractMenuItem *> &items)
 		new MenuItem{ListItemType::Button, "Values", "Raw, output, and saved state.", go_values},
 		new MenuItem{ListItemType::Button, "Rumble Strength", "Global motor gain.", go_rumble},
 		new MenuItem{ListItemType::Button, "Test Rumble", "Short motor pulse.", go_rumble_test},
-		new MenuItem{ListItemType::Generic, "Swap A / B",
-			"Swaps A and B for games and menus.\nTakes effect on next boot.",
-			std::vector<std::any>{false, true},
-			std::vector<std::string>{"Off", "On"},
-			[]() -> std::any {
-				std::string cmd = "zlyme-ctl get ab_swap";
-				FILE *f = popen(cmd.c_str(), "r");
-				char buf[32] = {0};
-				bool on = false;
-				if (f) {
-					if (fgets(buf, sizeof(buf), f))
-						on = strncmp(buf, "on", 2) == 0;
-					pclose(f);
-				}
-				return on;
-			},
-			[](const std::any &v) {
-				const char *val = std::any_cast<bool>(v) ? "on" : "off";
-				std::string cmd = std::string("zlyme-ctl set ab_swap ") + val;
-				system(cmd.c_str());
-			},
-			[]() { system("zlyme-ctl set ab_swap off"); }},
 	};
 	items.push_back(new MenuItem{ListItemType::Generic, "Joysticks",
 		"Calibration and deadzone.", {}, {}, nullptr, nullptr, DeferToSubmenu,

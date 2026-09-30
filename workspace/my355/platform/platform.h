@@ -74,8 +74,13 @@
 #define JOY_SELECT		8
 #define JOY_START		9
 
-#define JOY_A			1
-#define JOY_B			0
+/* Printed A is east (BTN_EAST) and printed B is south (BTN_SOUTH).
+ * The built-in InputPlumber map sends east to virtual South (SDL b0)
+ * and south to virtual East (SDL b1). Xbox GameController still uses
+ * a:b0 b:b1, so these indices make the raw NextUI buttons match the
+ * printed labels without reversing an external Xbox pad. */
+#define JOY_A			0
+#define JOY_B			1
 #define JOY_X			2
 #define JOY_Y			3
 
