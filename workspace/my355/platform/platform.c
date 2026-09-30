@@ -27,6 +27,8 @@
 #include <dirent.h>
 #include <string.h>
 #include <stdint.h>
+#include <ctype.h>
+#include <sys/wait.h>
 
 ///////////////////////////////
 
@@ -1014,6 +1016,84 @@ void PLAT_setNetworkTimeSync(bool on) {
 
 #define WIFI_SOCK_DIR "/var/run/wpa_supplicant"
 #include "generic_wifi.c"
+
+bool PLAT_wifiCountrySupported(void)
+{
+	return true;
+}
+
+static int wifi_country_token(const char *code, char out[3])
+{
+	if (!code || !out)
+		return 0;
+	if (code[0] == '0' && code[1] == '0' && code[2] == '\0') {
+		out[0] = '0';
+		out[1] = '0';
+		out[2] = '\0';
+		return 1;
+	}
+	if (!isalpha((unsigned char)code[0]) || !isalpha((unsigned char)code[1]) || code[2] != '\0')
+		return 0;
+	out[0] = (char)toupper((unsigned char)code[0]);
+	out[1] = (char)toupper((unsigned char)code[1]);
+	out[2] = '\0';
+	return 1;
+}
+
+int PLAT_wifiGetCountry(char *buf, int len)
+{
+	FILE *fp;
+	char line[16];
+	size_t n;
+
+	if (!buf || len < 3)
+		return -1;
+	buf[0] = '0';
+	buf[1] = '0';
+	buf[2] = '\0';
+	fp = popen("zlyme-wifi country", "r");
+	if (!fp)
+		return -1;
+	if (fgets(line, sizeof(line), fp)) {
+		char token[3];
+
+		n = strlen(line);
+		while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+			line[--n] = '\0';
+		if (wifi_country_token(line, token)) {
+			buf[0] = token[0];
+			buf[1] = token[1];
+			buf[2] = '\0';
+		}
+	}
+	pclose(fp);
+	return 0;
+}
+
+int PLAT_wifiSetCountry(const char *code)
+{
+	char token[3];
+	char cmd[64];
+	int status;
+
+	if (!wifi_country_token(code, token))
+		return -2;
+	/* EU is rejected by zlyme-wifi. Two letters are otherwise passed through. */
+	snprintf(cmd, sizeof(cmd), "zlyme-wifi country %s", token);
+	status = system(cmd);
+	if (status == -1 || !WIFEXITED(status))
+		return -1;
+	switch (WEXITSTATUS(status)) {
+	case 0:
+		return 0;
+	case 1:
+		return -2;
+	case 3:
+		return -3;
+	default:
+		return -1;
+	}
+}
 
 /////////////////////////
 

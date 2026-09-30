@@ -1,6 +1,7 @@
 #include "wifimenu.hpp"
 #include "keyboardprompt.hpp"
 
+#include <cstring>
 #include <unordered_set>
 #include <map>
 
@@ -24,6 +25,47 @@ Menu::Menu(const int &globalQuit, int &globalDirty) : MenuList(MenuItemType::Fix
                               std::bind(&Menu::setWifiDiagnosticsState, this, std::placeholders::_1),
                               std::bind(&Menu::resetWifiDiagnosticsState, this));
     items.push_back(toggleItem);
+    if (WIFI_countrySupported()) {
+        auto *prompt = new KeyboardPrompt("Country", [](AbstractMenuItem &item) -> InputReactionHint {
+            std::string code = item.getName();
+            if (code.size() < 2) {
+                MenuList::showOverlay("Enter a two-letter country code", OverlayDismissMode::DismissOnA);
+                return NoOp;
+            }
+            int rc = WIFI_setCountry(code.c_str());
+            if (rc == -2) {
+                MenuList::showOverlay("Invalid country code", OverlayDismissMode::DismissOnA);
+                return NoOp;
+            }
+            if (rc == -3) {
+                MenuList::showOverlay("Country saved. Radio did not apply.", OverlayDismissMode::DismissOnA);
+                return Exit;
+            }
+            if (rc != 0) {
+                MenuList::showOverlay("Could not save country", OverlayDismissMode::DismissOnA);
+                return NoOp;
+            }
+            return Exit;
+        });
+        items.push_back(new TextInputMenuItem{"Country",
+            "Two-letter country code used for WiFi channels.\nUse the country where the device is currently being used.",
+            []() -> std::any {
+                char buf[8] = {0};
+                if (WIFI_getCountry(buf, (int)sizeof(buf)) != 0 || std::strcmp(buf, "00") == 0)
+                    return std::string("World (00)");
+                return std::string(buf);
+            },
+            [prompt](AbstractMenuItem &item) -> InputReactionHint {
+                char buf[8] = {0};
+                if (WIFI_getCountry(buf, (int)sizeof(buf)) != 0)
+                    prompt->setInitialText("00");
+                else
+                    prompt->setInitialText(buf);
+                item.defer(true);
+                return NoOp;
+            },
+            prompt});
+    }
     items.push_back(diagItem);
 
     // best effort layout based on the platform defines, user should really call performLayout manually

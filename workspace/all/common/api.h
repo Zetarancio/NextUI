@@ -862,6 +862,12 @@ void PLAT_wifiDisconnect();
 bool PLAT_wifiDiagnosticsEnabled();
 // returns true if diagnostic logging is enabled
 void PLAT_wifiDiagnosticsEnable(bool on);
+// my355 can set the Wi-Fi regulatory country. Other platforms return false.
+bool PLAT_wifiCountrySupported(void);
+// Writes the configured alpha-2, or "00" for World/default. Returns 0 on success.
+int PLAT_wifiGetCountry(char *buf, int len);
+// 0 saved and applied, -2 rejected, -1 not saved, -3 saved but the radio did not apply it.
+int PLAT_wifiSetCountry(const char *code);
 
 #define WIFI_init PLAT_wifiInit
 #define WIFI_supported PLAT_hasWifi
@@ -877,6 +883,9 @@ void PLAT_wifiDiagnosticsEnable(bool on);
 #define WIFI_disconnect PLAT_wifiDisconnect
 #define WIFI_diagnosticsEnabled PLAT_wifiDiagnosticsEnabled
 #define WIFI_diagnosticsEnable PLAT_wifiDiagnosticsEnable
+#define WIFI_countrySupported PLAT_wifiCountrySupported
+#define WIFI_getCountry PLAT_wifiGetCountry
+#define WIFI_setCountry PLAT_wifiSetCountry
 
 ////////////////////////
 typedef enum {

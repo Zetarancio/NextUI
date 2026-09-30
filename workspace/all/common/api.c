@@ -4918,6 +4918,21 @@ FALLBACK_IMPLEMENTATION void PLAT_wifiConnectPass(const char *ssid, WifiSecurity
 FALLBACK_IMPLEMENTATION void PLAT_wifiDisconnect() {}
 FALLBACK_IMPLEMENTATION bool PLAT_wifiDiagnosticsEnabled() { return false; }
 FALLBACK_IMPLEMENTATION void PLAT_wifiDiagnosticsEnable(bool on) {}
+FALLBACK_IMPLEMENTATION bool PLAT_wifiCountrySupported(void) { return false; }
+FALLBACK_IMPLEMENTATION int PLAT_wifiGetCountry(char *buf, int len)
+{
+	if (buf && len >= 3) {
+		buf[0] = '0';
+		buf[1] = '0';
+		buf[2] = '\0';
+	}
+	return -1;
+}
+FALLBACK_IMPLEMENTATION int PLAT_wifiSetCountry(const char *code)
+{
+	(void)code;
+	return -1;
+}
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
