@@ -11,6 +11,8 @@ namespace Wifi
         int &globalDirty;
         // wifi on/off
         MenuItem *toggleItem;
+        // regulatory country; kept across scan rebuilds
+        AbstractMenuItem *countryItem = nullptr;
         // diagnostics on/off
         MenuItem *diagItem;
 

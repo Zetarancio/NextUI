@@ -25,6 +25,7 @@ Menu::Menu(const int &globalQuit, int &globalDirty) : MenuList(MenuItemType::Fix
                               std::bind(&Menu::setWifiDiagnosticsState, this, std::placeholders::_1),
                               std::bind(&Menu::resetWifiDiagnosticsState, this));
     items.push_back(toggleItem);
+    countryItem = nullptr;
     if (WIFI_countrySupported()) {
         auto *prompt = new KeyboardPrompt("Country", [](AbstractMenuItem &item) -> InputReactionHint {
             std::string code = item.getName();
@@ -65,6 +66,7 @@ Menu::Menu(const int &globalQuit, int &globalDirty) : MenuList(MenuItemType::Fix
                 return NoOp;
             },
             prompt});
+        countryItem = items.back();
     }
     items.push_back(diagItem);
 
@@ -194,12 +196,14 @@ void Menu::updater()
                     selectedName = getSelectedItemName();
                     for (auto *i : items)
                     {
-                        bool keep = (i == toggleItem || i == diagItem);
+                        bool keep = (i == toggleItem || i == countryItem || i == diagItem);
                         if (!keep)
                             stale.push_back(i);
                     }
                     items.clear();
                     items.push_back(toggleItem);
+                    if (countryItem)
+                        items.push_back(countryItem);
                     items.push_back(diagItem);
 
                     for (auto &[s, r] : scanSsids)
@@ -265,12 +269,14 @@ void Menu::updater()
                     WriteLock w(itemLock);
                     for (auto *i : items)
                     {
-                        bool keep = (i == toggleItem || i == diagItem);
+                        bool keep = (i == toggleItem || i == countryItem || i == diagItem);
                         if (!keep)
                             stale.push_back(i);
                     }
                     items.clear();
                     items.push_back(toggleItem);
+                    if (countryItem)
+                        items.push_back(countryItem);
                     items.push_back(diagItem);
                     selectionDirty = true;
                     prevSsids.clear();
