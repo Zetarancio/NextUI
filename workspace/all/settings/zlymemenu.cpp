@@ -415,15 +415,108 @@ static InputReactionHint Zlyme_ejectSd2(AbstractMenuItem &item)
 	return NoOp;
 }
 
+static std::string pm_label(const std::string &root)
+{
+	if (root == "/storage")
+		return "Main card";
+	if (root == "/mnt/sd2")
+		return "Second SD";
+	std::string::size_type slash = root.rfind('/');
+	if (slash != std::string::npos && slash + 1 < root.size())
+		return root.substr(slash + 1);
+	return root;
+}
+
+static int run_two(const char *bin, const char *a, const char *b)
+{
+	pid_t pid = fork();
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		execl(bin, bin, a, b, (char *)NULL);
+		_exit(127);
+	}
+	int status = 1;
+	if (waitpid(pid, &status, 0) < 0)
+		return -1;
+	return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
+}
+
+static InputReactionHint Zlyme_formatStorage(AbstractMenuItem &item)
+{
+	(void)item;
+	if (system("/usr/sbin/zlyme-format-ui") != 0)
+		MenuList::showOverlay("Format failed", OverlayDismissMode::DismissOnA);
+	return NoOp;
+}
+
 void Zlyme_appendStorageItems(std::vector<AbstractMenuItem *> &items)
 {
-	if (!ctl_on("sd2") && !ctl_on("otg"))
+	std::vector<AbstractMenuItem *> storage;
+
+	if ((ctl_on("sd2") || ctl_on("otg")) && extra_volume_mounted()) {
+		storage.push_back(new MenuItem{ListItemType::Button, "Eject library card",
+			"Unmount the second SD or USB disk before pulling it.\nDo not eject while a game from that card is running.",
+			Zlyme_ejectSd2});
+	}
+
+	std::vector<std::any> roots;
+	std::vector<std::string> labels;
+	FILE *list = popen("/usr/sbin/zlyme-portmaster-root list", "r");
+	if (list) {
+		char line[512];
+		while (fgets(line, sizeof(line), list)) {
+			std::string root = trim(line);
+			if (root.empty())
+				continue;
+			roots.push_back(root);
+			labels.push_back(pm_label(root));
+		}
+		pclose(list);
+	}
+	if (!roots.empty()) {
+		storage.push_back(new MenuItem{ListItemType::Generic, "PortMaster location",
+			"Where new PortMaster games are installed.\nExisting games stay where they are.",
+			roots, labels,
+			[]() -> std::any {
+				FILE *f = popen("/usr/sbin/zlyme-portmaster-root get", "r");
+				std::string cur = "/storage";
+				if (f) {
+					char buf[512] = {0};
+					if (fgets(buf, sizeof(buf), f))
+						cur = trim(buf);
+					pclose(f);
+				}
+				return cur;
+			},
+			[](const std::any &v) {
+				std::string root = std::any_cast<std::string>(v);
+				run_two("/usr/sbin/zlyme-portmaster-root", "set", root.c_str());
+			},
+			[]() {
+				run_two("/usr/sbin/zlyme-portmaster-root", "set", "/storage");
+			}});
+	}
+
+	FILE *fmt = popen("/usr/sbin/zlyme-storage-format list", "r");
+	bool can_format = false;
+	if (fmt) {
+		char buf[8];
+		can_format = fgets(buf, sizeof(buf), fmt) != NULL;
+		pclose(fmt);
+	}
+	if (can_format) {
+		storage.push_back(new MenuItem{ListItemType::Button, "Format removable storage",
+			"Erase a second SD or USB disk. The main card cannot be selected.",
+			Zlyme_formatStorage});
+	}
+
+	if (storage.empty())
 		return;
-	if (!extra_volume_mounted())
-		return;
-	items.push_back(new MenuItem{ListItemType::Button, "Eject library card",
-		"Unmount the second SD or USB disk before pulling it.\nDo not eject while a game from that card is running.",
-		Zlyme_ejectSd2});
+	items.push_back(new MenuItem{ListItemType::Generic, "Storage",
+		"Library cards, PortMaster, and formatting.",
+		{}, {}, nullptr, nullptr, DeferToSubmenu,
+		new MenuList(MenuItemType::Fixed, "Storage", storage)});
 }
 
 static int wait_ab_game(const std::string &msg, const char *aLabel, const char *bLabel)
