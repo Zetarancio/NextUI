@@ -10,6 +10,10 @@ int suffixMatch(char* suf,const char* str);
 int exactMatch(const char* str1, const char* str2);
 int containsString(char* haystack, char* needle);
 int hide(char* file_name);
+int isJunkDir(const char* name);
+int isAllowedRom(const char* emu_tag, const char* file_name);
+int skipCompanionDisc(const char* dir, const char* name);
+int skipCompanionFolder(const char* dir, const char* name);
 
 char *splitString(char *str, const char *delim);
 char *replaceString2(const char *orig, char *rep, char *with);
@@ -28,6 +32,17 @@ bool pathRelativeTo(char *path_out, const char *dir_from, const char *file_to);
 void getDisplayName(const char* in_name, char* out_name);
 void getEmuName(const char* in_name, char* out_name);
 void getEmuPath(char* emu_name, char* pak_path);
+
+void libraryReload(void);
+int libraryCount(void);
+const char *libraryRoot(int i);
+int libraryRomsDir(int i, char *out, size_t n);
+int pathUnderLibraryRoms(const char *path);
+int isLibraryRomsDir(const char *path);
+int libraryFindConsole(int i, const char *tag, char *out, size_t n);
+void libraryBadge(const char *path, char *out, size_t n);
+void pathFromRecent(const char *stored, char *out, size_t n);
+int consoleRelFromPath(const char *path, char *tag, size_t tag_n, char *rel, size_t rel_n);
 
 void normalizeNewline(char* line);
 void trimTrailingNewlines(char* line);
@@ -48,5 +63,10 @@ int clamp(int x, int lower, int upper);
 double clampd(double x, double lower, double upper);
 
 char* findFileInDir(const char *directory, const char *filename);
+
+/* Shell helper with a hard deadline. Returns the exit status, 124 on
+ * timeout, or -1 if the command could not be started. BusyBox has no
+ * timeout applet, and bluetoothctl/wpa_cli can block the UI forever. */
+int runCmdTimeout(const char *cmd, char *output, size_t output_len, int timeout_ms);
 
 #endif
