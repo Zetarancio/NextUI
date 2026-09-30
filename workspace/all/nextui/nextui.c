@@ -17,6 +17,7 @@
 #include "zlyme_prefs.h"
 #include <sys/resource.h>
 #include <pthread.h>
+#include <sys/wait.h>
 #include <assert.h>
 #include <limits.h>
 #include <stdint.h>
@@ -2015,7 +2016,9 @@ static struct {
 	char tag[64];
 	char rel[MAX_PATH];
 	char title[256];
+	char path[MAX_PATH];
 	char alts[8][32];
+	int confirm;
 } editprefs;
 
 static int edit_gov_index(const char *g)
@@ -2058,6 +2061,8 @@ static void editprefs_open(Entry *e)
 		return;
 	if (e->type == ENTRY_ROM) {
 		char badge[64] = {0};
+		if (e->path)
+			snprintf(editprefs.path, sizeof(editprefs.path), "%s", e->path);
 		snprintf(editprefs.kind, sizeof(editprefs.kind), "rom");
 		libraryBadge(e->path, badge, sizeof(badge));
 		if (badge[0])
@@ -2879,9 +2884,45 @@ int main (int argc, char *argv[]) {
 
 		if (currentScreen == SCREEN_EDITPREFS) {
 			int rows = editprefs_rows();
-			if (PAD_justPressed(BTN_B) || PAD_tappedMenu(now)) {
+			int delete_row = editprefs.path[0] ? rows : -1;
+			int total_rows = rows + (delete_row >= 0);
+			if (editprefs.confirm) {
+				if (PAD_justPressed(BTN_B) || PAD_tappedMenu(now)) {
+					editprefs.confirm = 0;
+					dirty = 1;
+				} else if (PAD_justPressed(BTN_A)) {
+					pid_t pid = fork();
+					if (pid == 0) {
+						setenv("ZLYME_ROM_PLAN", "/tmp/zlyme-rom.plan", 1);
+						execl("/usr/sbin/zlyme-game-cleanup", "zlyme-game-cleanup",
+							"rom", editprefs.path, "--dry-run", (char *)NULL);
+						_exit(127);
+					}
+					int st = 1;
+					if (pid > 0) {
+						waitpid(pid, &st, 0);
+						if (WIFEXITED(st) && WEXITSTATUS(st) == 0) {
+							pid = fork();
+							if (pid == 0) {
+								execl("/usr/sbin/zlyme-game-cleanup", "zlyme-game-cleanup",
+									"rom-apply", "/tmp/zlyme-rom.plan", (char *)NULL);
+								_exit(127);
+							}
+							if (pid > 0)
+								waitpid(pid, &st, 0);
+						}
+					}
+					editprefs.confirm = 0;
+					editprefs.open = 0;
+					currentScreen = SCREEN_GAMELIST;
+					dirty = 1;
+				}
+			} else if (PAD_justPressed(BTN_B) || PAD_tappedMenu(now)) {
 				editprefs.open = 0;
 				currentScreen = SCREEN_GAMELIST;
+				dirty = 1;
+			} else if (PAD_justPressed(BTN_A) && editprefs.row == delete_row) {
+				editprefs.confirm = 1;
 				dirty = 1;
 			} else if (PAD_justPressed(BTN_A)) {
 				editprefs_save();
@@ -2894,16 +2935,16 @@ int main (int argc, char *argv[]) {
 				currentScreen = SCREEN_GAMELIST;
 				dirty = 1;
 			} else if (PAD_justPressed(BTN_UP)) {
-				editprefs.row = (editprefs.row + rows - 1) % rows;
+				editprefs.row = (editprefs.row + total_rows - 1) % total_rows;
 				dirty = 1;
 			} else if (PAD_justPressed(BTN_DOWN)) {
-				editprefs.row = (editprefs.row + 1) % rows;
+				editprefs.row = (editprefs.row + 1) % total_rows;
 				dirty = 1;
 			} else if (PAD_justPressed(BTN_LEFT) || PAD_justPressed(BTN_RIGHT)) {
 				int dir = PAD_justPressed(BTN_RIGHT) ? 1 : -1;
 				if (editprefs.row == 0) {
 					editprefs.gov_i = (editprefs.gov_i + dir + EDIT_GOV_N) % EDIT_GOV_N;
-				} else if (editprefs.n_alts > 1) {
+				} else if (editprefs.row != delete_row && editprefs.n_alts > 1) {
 					editprefs.emu_i = (editprefs.emu_i + dir + editprefs.n_alts) % editprefs.n_alts;
 				}
 				dirty = 1;
@@ -3221,19 +3262,33 @@ int main (int argc, char *argv[]) {
 				int rows = editprefs_rows();
 				int y = SCALE1(PADDING + PILL_SIZE + BUTTON_MARGIN);
 				const char *gov = edit_gov_names[editprefs.gov_i];
-				SDL_Surface *title = TTF_RenderUTF8_Blended(font.large, editprefs.title, COLOR_WHITE);
-				if (title) {
-					SDL_Rect dst = {SCALE1(PADDING), SCALE1(PADDING), title->w, title->h};
-					SDL_BlitSurface(title, NULL, screen, &dst);
-					SDL_FreeSurface(title);
+				if (editprefs.confirm) {
+					GFX_blitMessage(font.large,
+						"Delete this game?\nROM and its matching saves will be removed.",
+						screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING),
+							screen->w - SCALE1(PADDING * 2), screen->h - SCALE1(PILL_SIZE * 2)});
+					GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 0);
+					GFX_blitButtonGroup((char*[]){ "A","DELETE", NULL }, 1, screen, 1);
+				} else {
+					SDL_Surface *title = TTF_RenderUTF8_Blended(font.large, editprefs.title, COLOR_WHITE);
+					if (title) {
+						SDL_Rect dst = {SCALE1(PADDING), SCALE1(PADDING), title->w, title->h};
+						SDL_BlitSurface(title, NULL, screen, &dst);
+						SDL_FreeSurface(title);
+					}
+					editprefs_blit_row(screen, y, editprefs.row == 0, "Governor", gov);
+					if (rows > 1) {
+						editprefs_blit_row(screen, y + SCALE1(PILL_SIZE + BUTTON_MARGIN),
+							editprefs.row == 1, "Emulator", editprefs.alts[editprefs.emu_i]);
+					}
+					if (editprefs.path[0]) {
+						int dy = rows > 1 ? 2 : 1;
+						editprefs_blit_row(screen, y + dy * SCALE1(PILL_SIZE + BUTTON_MARGIN),
+							editprefs.row == rows, "Delete game", "A");
+					}
+					GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 0);
+					GFX_blitButtonGroup((char*[]){ "X","INHERIT", "A","SAVE", NULL }, 1, screen, 1);
 				}
-				editprefs_blit_row(screen, y, editprefs.row == 0, "Governor", gov);
-				if (rows > 1) {
-					editprefs_blit_row(screen, y + SCALE1(PILL_SIZE + BUTTON_MARGIN),
-						editprefs.row == 1, "Emulator", editprefs.alts[editprefs.emu_i]);
-				}
-				GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 0);
-				GFX_blitButtonGroup((char*[]){ "X","INHERIT", "A","SAVE", NULL }, 1, screen, 1);
 				lastScreen = SCREEN_EDITPREFS;
 			}
 			else if (currentScreen == SCREEN_QUICKMENU) {
