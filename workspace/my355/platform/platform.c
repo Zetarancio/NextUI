@@ -832,7 +832,14 @@ void PLAT_getOsVersionInfo(char* output_str, size_t max_len)
 
 bool PLAT_btIsConnected(void)
 {
-	return bluetoothConnected;
+	/* CFG is cleared before the radio thread finishes, so a cached
+	 * true must not keep the headset icon up. */
+	return BT_enabled() && bluetoothConnected;
+}
+
+bool PLAT_supportsColorTemperature(void)
+{
+	return false;
 }
 
 ConnectionStrength PLAT_connectionStrength(void) {
@@ -980,19 +987,24 @@ void PLAT_setCurrentTimezone(const char* tz) {
 	// set in config
 	CFG_setCurrentTimezone(tz_index);
 
-	// This fixes the timezone until the next reboot
-	char *tz_path = (char *)malloc(256);
-	if (!tz_path) {
-		return;
+	/* /etc/localtime is a symlink to CUR_ZONE_PATH. The copy is the
+	 * zone glibc localtime() reads. The clock and RTC stay UTC. */
+	{
+		const char *p;
+		int safe = 1;
+		for (p = tz; *p; p++) {
+			if (!isalnum((unsigned char)*p) && *p != '/' && *p != '_' && *p != '+' && *p != '-')
+				safe = 0;
+		}
+		if (safe) {
+			char cmd[512];
+			snprintf(cmd, sizeof(cmd), "zlyme-timezone apply %s", tz);
+			system(cmd);
+		}
 	}
-	snprintf(tz_path, 256, ZONE_PATH "/%s", tz);
-	// replace existing
-	char cmd[512];
-	snprintf(cmd, 512, "cp %s %s", tz_path, CUR_ZONE_PATH);
-	system(cmd);
-	free(tz_path);
 
-	// Settings timezone row only. GFX_init no longer calls this.
+	/* Settings timezone row only. GFX_init no longer calls this.
+	 * -u keeps the hardware clock in UTC. */
 	system("hwclock -u -w && hwclock --systz -u");
 }
 
