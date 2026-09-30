@@ -2079,8 +2079,8 @@ static void rescanLibraries(void)
 	dirty = 1;
 }
 
-#define EDIT_GOV_N 4
-static const char *edit_gov_names[EDIT_GOV_N] = { "play", "heavy", "smart", "idle" };
+#define EDIT_GOV_N 5
+static const char *edit_gov_names[EDIT_GOV_N] = { "auto", "play", "heavy", "smart", "idle" };
 
 static struct {
 	int open;
@@ -2094,8 +2094,59 @@ static struct {
 	char title[256];
 	char path[MAX_PATH];
 	char alts[8][32];
+	int def_i;
+	char auto_label[16];
 	int confirm;
 } editprefs;
+
+static const char *edit_emu_label(const char *id)
+{
+	if (!id || !id[0])
+		return "";
+	if (exactMatch((char *)id, "gpsp")) return "gpSP";
+	if (exactMatch((char *)id, "pcsx_rearmed")) return "PCSX-ReARMed";
+	if (exactMatch((char *)id, "picodrive")) return "PicoDrive";
+	if (exactMatch((char *)id, "genesis_plus_gx")) return "Genesis Plus GX";
+	if (exactMatch((char *)id, "native")) return "PICO-8";
+	if (exactMatch((char *)id, "fake08")) return "Fake-8";
+	if (exactMatch((char *)id, "gambatte")) return "Gambatte";
+	return id;
+}
+
+static const char *edit_gov_label(int index)
+{
+	if (index <= 0)
+		return editprefs.auto_label[0] ? editprefs.auto_label : "Auto";
+	if (index == 1) return "Play";
+	if (index == 2) return "Heavy";
+	if (index == 3) return "Smart";
+	if (index == 4) return "Idle";
+	return "Auto";
+}
+
+static void edit_load_auto_label(const char *tag)
+{
+	char cmd[128];
+	FILE *f;
+	char line[128];
+
+	snprintf(editprefs.auto_label, sizeof(editprefs.auto_label), "Auto");
+	if (!tag || !tag[0])
+		return;
+	snprintf(cmd, sizeof(cmd), "zlyme-governor --policy %s", tag);
+	f = popen(cmd, "r");
+	if (!f)
+		return;
+	if (fgets(line, sizeof(line), f)) {
+		if (strstr(line, "profile=spruce"))
+			snprintf(editprefs.auto_label, sizeof(editprefs.auto_label), "Auto");
+		else if (strstr(line, "profile=heavy"))
+			snprintf(editprefs.auto_label, sizeof(editprefs.auto_label), "Heavy");
+		else if (strstr(line, "profile=play"))
+			snprintf(editprefs.auto_label, sizeof(editprefs.auto_label), "Play");
+	}
+	pclose(f);
+}
 
 static int edit_gov_index(const char *g)
 {
@@ -2171,9 +2222,29 @@ static void editprefs_open(Entry *e)
 			prefsLookup(editprefs.tag, rel, gov, sizeof(gov), emu, sizeof(emu));
 		}
 	}
-	editprefs.gov_i = edit_gov_index(gov[0] ? gov : "play");
+	edit_load_auto_label(editprefs.tag);
+	editprefs.gov_i = edit_gov_index(gov[0] ? gov : "auto");
 	editprefs.n_alts = prefsAlts(editprefs.tag, editprefs.alts, 8);
-	editprefs.emu_i = 0;
+	{
+		char def[32] = {0};
+		int i, found = 0;
+		prefsDefault(editprefs.tag, def, sizeof(def));
+		if (def[0]) {
+			for (i = 0; i < editprefs.n_alts; i++) {
+				if (exactMatch(editprefs.alts[i], def)) {
+					found = 1;
+					editprefs.def_i = i;
+					break;
+				}
+			}
+			if (!found && editprefs.n_alts < 8) {
+				snprintf(editprefs.alts[editprefs.n_alts], 32, "%s", def);
+				editprefs.def_i = editprefs.n_alts;
+				editprefs.n_alts++;
+			}
+		}
+	}
+	editprefs.emu_i = editprefs.def_i;
 	if (emu[0]) {
 		int i;
 		for (i = 0; i < editprefs.n_alts; i++) {
@@ -2189,16 +2260,18 @@ static void editprefs_open(Entry *e)
 
 static void editprefs_save(void)
 {
+	const char *gov = edit_gov_names[editprefs.gov_i];
 	const char *emu = "";
+	if (exactMatch((char *)gov, "auto"))
+		gov = "";
 	if (editprefs.n_alts > 1)
 		emu = editprefs.alts[editprefs.emu_i];
-	prefsSet(editprefs.kind, editprefs.tag, editprefs.rel,
-		edit_gov_names[editprefs.gov_i], emu);
+	prefsSet(editprefs.kind, editprefs.tag, editprefs.rel, gov, emu);
 }
 
 static int editprefs_rows(void)
 {
-	return editprefs.n_alts > 1 ? 2 : 1;
+	return editprefs.n_alts >= 1 ? 2 : 1;
 }
 
 static void editprefs_blit_row(SDL_Surface *screen, int y, int selected, const char *label, const char *value)
@@ -3010,9 +3083,8 @@ int main (int argc, char *argv[]) {
 				dirty = 1;
 			} else if (PAD_justPressed(BTN_X)) {
 				prefsClear(editprefs.kind, editprefs.tag, editprefs.rel);
-				editprefs.open = 0;
-				currentScreen = SCREEN_GAMELIST;
-				folderbgchanged = 1;
+				editprefs.gov_i = 0;
+				editprefs.emu_i = editprefs.def_i;
 				dirty = 1;
 			} else if (PAD_justPressed(BTN_UP)) {
 				editprefs.row = (editprefs.row + total_rows - 1) % total_rows;
@@ -3341,7 +3413,8 @@ int main (int argc, char *argv[]) {
 			if (currentScreen == SCREEN_EDITPREFS) {
 				int rows = editprefs_rows();
 				int y = SCALE1(PADDING + PILL_SIZE + BUTTON_MARGIN);
-				const char *gov = edit_gov_names[editprefs.gov_i];
+				const char *gov = edit_gov_label(editprefs.gov_i);
+				GFX_clearLayers(LAYER_ALL);
 				if (editprefs.confirm) {
 					GFX_blitMessage(font.large,
 						"Delete this game?\nROM and its matching saves will be removed.",
@@ -3357,9 +3430,10 @@ int main (int argc, char *argv[]) {
 						SDL_FreeSurface(title);
 					}
 					editprefs_blit_row(screen, y, editprefs.row == 0, "Governor", gov);
-					if (rows > 1) {
+					if (rows > 1 && editprefs.n_alts > 0) {
 						editprefs_blit_row(screen, y + SCALE1(PILL_SIZE + BUTTON_MARGIN),
-							editprefs.row == 1, "Emulator", editprefs.alts[editprefs.emu_i]);
+							editprefs.row == 1, "Emulator",
+							edit_emu_label(editprefs.alts[editprefs.emu_i]));
 					}
 					if (editprefs.path[0]) {
 						int dy = rows > 1 ? 2 : 1;

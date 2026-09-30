@@ -369,10 +369,10 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 			system("zlyme-ctl apply-logs");
 		}});
 	advanced.push_back(new MenuItem{ListItemType::Button, "Reset Settings",
-		"Return product settings to defaults. Games, saves, Wi-Fi and paired devices stay.",
+		"Return product settings to defaults.\nGames, saves, Wi-Fi and paired devices stay.",
 		Zlyme_resetSettings});
 	advanced.push_back(new MenuItem{ListItemType::Button, "Factory Reset",
-		"Restore settings and stock Tools/Emus. Games, saves, Wi-Fi and personal content stay.",
+		"Restore settings and stock Tools/Emus.\nGames, saves, Wi-Fi and personal content stay.",
 		Zlyme_factoryReset});
 	items.push_back(new MenuItem{ListItemType::Generic, "Advanced",
 		"GPU, power features, logs, and reset.",
@@ -645,7 +645,7 @@ void Zlyme_appendGameCleanup(std::vector<AbstractMenuItem *> &items)
 			return cleanup_button("ra-cores", "No core options", "Delete %d RetroArch option files?");
 		}});
 	items.push_back(new MenuItem{ListItemType::Button, "Reset standalone settings",
-		"Reset settings for standalone emulators. Games and saves are kept.",
+		"Reset standalone emulator settings.\nGames and saves are kept.",
 		[](AbstractMenuItem &item) -> InputReactionHint {
 			(void)item;
 			return cleanup_button("standalones", "No standalone settings", "Reset %d standalone settings?");
