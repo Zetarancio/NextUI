@@ -22,6 +22,14 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <math.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
+#include <linux/fb.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+
+static void plat_blank_fb0(void);
 
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
@@ -557,7 +565,7 @@ void PLAT_initShaders() {
 		shaders[i].program = &shader_programs[i];
 	}
 
-	// Init .system shaders
+	// Stock shaders on squashfs (SYSTEM_PATH/shaders)
 	// Final display shader (simple texture blit)
 	init_shader_program(&s_shader_default, SYSSHADERS_FOLDER, "default.glsl");
 
@@ -602,7 +610,79 @@ void PLAT_resetShaders() {
 	shaderResetRequested = 1;
 }
 
+static void plat_video_teardown_window(void) {
+	if (vid.stream_layer1) { SDL_DestroyTexture(vid.stream_layer1); vid.stream_layer1 = NULL; }
+	if (vid.target_layer1) { SDL_DestroyTexture(vid.target_layer1); vid.target_layer1 = NULL; }
+	if (vid.target_layer2) { SDL_DestroyTexture(vid.target_layer2); vid.target_layer2 = NULL; }
+	if (vid.target_layer3) { SDL_DestroyTexture(vid.target_layer3); vid.target_layer3 = NULL; }
+	if (vid.target_layer4) { SDL_DestroyTexture(vid.target_layer4); vid.target_layer4 = NULL; }
+	if (vid.target_layer5) { SDL_DestroyTexture(vid.target_layer5); vid.target_layer5 = NULL; }
+	if (vid.gl_context) {
+		SDL_GL_MakeCurrent(NULL, NULL);
+		SDL_GL_DeleteContext(vid.gl_context);
+		vid.gl_context = NULL;
+	}
+	if (vid.renderer) {
+		SDL_DestroyRenderer(vid.renderer);
+		vid.renderer = NULL;
+	}
+	if (vid.window) {
+		SDL_DestroyWindow(vid.window);
+		vid.window = NULL;
+	}
+}
+
+// kmsdrm: a pak that just exited can still hold master. CreateWindow then
+// succeeds with a renderer that cannot make textures. Retry until it can.
+// The frontend needs GLES 3.0: shaders are rewritten to #version 300 es,
+// and draws use vertex arrays and program binaries. SDL reads the profile
+// when the window loads EGL. Minor version 2 asks eglCreateContext for 3.2.
+static int plat_video_try_open(int w, int h) {
+	if (strcmp("Desktop", PLAT_getModel()) == 0) {
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+	} else {
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+	}
+
+	vid.window = SDL_CreateWindow("", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, w, h, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
+	if (!vid.window)
+		return 0;
+	vid.renderer = SDL_CreateRenderer(vid.window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+	if (!vid.renderer)
+		return 0;
+
+	vid.gl_context = SDL_GL_CreateContext(vid.window);
+	if (!vid.gl_context) {
+		if (SDL_GetError()[0] == '\0')
+			SDL_SetError("SDL_GL_CreateContext failed");
+		return 0;
+	}
+	SDL_GL_MakeCurrent(vid.window, vid.gl_context);
+	glViewport(0, 0, w, h);
+
+	vid.stream_layer1 = SDL_CreateTexture(vid.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+	vid.target_layer1 = SDL_CreateTexture(vid.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
+	vid.target_layer2 = SDL_CreateTexture(vid.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
+	vid.target_layer3 = SDL_CreateTexture(vid.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
+	vid.target_layer4 = SDL_CreateTexture(vid.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
+	vid.target_layer5 = SDL_CreateTexture(vid.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
+	return vid.stream_layer1 && vid.target_layer1 && vid.target_layer2 &&
+		vid.target_layer3 && vid.target_layer4 && vid.target_layer5;
+}
+
 SDL_Surface* PLAT_initVideo(void) {
+	/* fb0 splash holds DRM. Drop it here so KMSDRM can take the panel. */
+	if (system("killall zlyme-splash >/dev/null 2>&1") == -1) {
+		/* ignore */
+	}
+	unlink("/tmp/zlyme-splash.pid");
+	unlink("/tmp/zlyme-splash.progress");
+	unlink("/boot/zlyme-splash.progress");
+	usleep(20000);
 
 #if NEXTUI_TSAN
 	/*
@@ -652,40 +732,39 @@ SDL_Surface* PLAT_initVideo(void) {
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"1");
 	SDL_SetHint(SDL_HINT_RENDER_DRIVER,"opengl");
 	SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION,"1");
+#ifdef SDL_HINT_KMSDRM_REQUIRE_DRM_MASTER
+	SDL_SetHint(SDL_HINT_KMSDRM_REQUIRE_DRM_MASTER, "1");
+#endif
 
-	vid.window   = SDL_CreateWindow("", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, w,h, SDL_WINDOW_OPENGL|SDL_WINDOW_SHOWN);
-	vid.renderer = SDL_CreateRenderer(vid.window,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
+	vid.window = NULL;
+	vid.renderer = NULL;
+	vid.gl_context = NULL;
+	vid.stream_layer1 = NULL;
+	vid.target_layer1 = NULL;
+	vid.target_layer2 = NULL;
+	vid.target_layer3 = NULL;
+	vid.target_layer4 = NULL;
+	vid.target_layer5 = NULL;
+
+	for (int tries = 0; tries < 80; tries++) {
+		if (plat_video_try_open(w, h))
+			break;
+		LOG_info("PLAT_initVideo: waiting for display (%s)\n", SDL_GetError());
+		plat_video_teardown_window();
+		SDL_QuitSubSystem(SDL_INIT_VIDEO);
+		SDL_Delay(25);
+		SDL_InitSubSystem(SDL_INIT_VIDEO);
+		SDL_ShowCursor(0);
+	}
+	if (!vid.renderer) {
+		LOG_error("PLAT_initVideo: no renderer\n");
+		return NULL;
+	}
+
 	SDL_SetRenderDrawBlendMode(vid.renderer, SDL_BLENDMODE_BLEND);
 	SDL_RendererInfo info;
 	SDL_GetRendererInfo(vid.renderer, &info);
 	LOG_info("Current render driver: %s\n", info.name);
-	// print texture formats
-	LOG_info("Supported texture formats:\n");
-	for (Uint32 i=0; i<info.num_texture_formats; i++) {
-		LOG_info("- %s\n", SDL_GetPixelFormatName(info.texture_formats[i]));
-	}
-
-	if(strcmp("Desktop", PLAT_getModel()) == 0) {
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-	}
-	else {
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-	}
-
-	vid.gl_context = SDL_GL_CreateContext(vid.window);
-	SDL_GL_MakeCurrent(vid.window, vid.gl_context);
-	glViewport(0, 0, w, h);
-
-	vid.stream_layer1 = SDL_CreateTexture(vid.renderer,SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w,h);
-	vid.target_layer1 = SDL_CreateTexture(vid.renderer,SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET , w,h);
-	vid.target_layer2 = SDL_CreateTexture(vid.renderer,SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET , w,h);
-	vid.target_layer3 = SDL_CreateTexture(vid.renderer,SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET , w,h);
-	vid.target_layer4 = SDL_CreateTexture(vid.renderer,SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET , w,h);
-	vid.target_layer5 = SDL_CreateTexture(vid.renderer,SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET , w,h);
 
 	vid.target	= NULL; // only needed for non-native sizes
 
@@ -712,7 +791,77 @@ SDL_Surface* PLAT_initVideo(void) {
 
 	vid.sharpness = SHARPNESS_SOFT;
 
+	/* Keep the fb0 spinner until the game list's first flip. */
 	return vid.screen;
+}
+
+void PLAT_blankFb0(void)
+{
+	plat_blank_fb0();
+}
+
+/* Initramfs paints the splash on /dev/fb0. KMSDRM sits above it; when
+ * NextUI or Settings drop DRM master the logo would flash back. Fill
+ * fb0 with the panel colour once KMS is up. */
+static void plat_blank_fb0(void)
+{
+	const uint8_t r = 0x05, g = 0x06, b = 0x08;
+	int fd;
+	struct fb_var_screeninfo v;
+	struct fb_fix_screeninfo f;
+	uint8_t *fb;
+	uint32_t line, x, y;
+	int bpp;
+	size_t span;
+
+	fd = open("/dev/fb0", O_RDWR);
+	if (fd < 0)
+		return;
+	memset(&v, 0, sizeof(v));
+	memset(&f, 0, sizeof(f));
+	if (ioctl(fd, FBIOGET_VSCREENINFO, &v) < 0 ||
+	    ioctl(fd, FBIOGET_FSCREENINFO, &f) < 0) {
+		close(fd);
+		return;
+	}
+	bpp = v.bits_per_pixel;
+	line = f.line_length;
+	if (!line)
+		line = v.xres_virtual * ((uint32_t)(bpp + 7) / 8);
+	if (v.xres < 1 || v.yres < 1 || line < 1) {
+		close(fd);
+		return;
+	}
+	span = (size_t)line * (v.yres_virtual ? v.yres_virtual : v.yres);
+	fb = mmap(NULL, span, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (fb == MAP_FAILED) {
+		close(fd);
+		return;
+	}
+	for (y = 0; y < v.yres; y++) {
+		for (x = 0; x < v.xres; x++) {
+			uint8_t *dst = fb + (size_t)y * line +
+				(size_t)x * ((uint32_t)(bpp + 7) / 8);
+			if (bpp == 16) {
+				uint16_t p = (uint16_t)(((r >> 3) << 11) |
+					((g >> 2) << 5) | (b >> 3));
+				dst[0] = (uint8_t)(p & 0xff);
+				dst[1] = (uint8_t)(p >> 8);
+			} else if (bpp == 24) {
+				dst[0] = b;
+				dst[1] = g;
+				dst[2] = r;
+			} else if (bpp >= 32) {
+				dst[0] = b;
+				dst[1] = g;
+				dst[2] = r;
+				dst[3] = 0xff;
+			}
+		}
+	}
+	msync(fb, span, MS_SYNC);
+	munmap(fb, span);
+	close(fd);
 }
 
 void PLAT_setClearColor(uint32_t color) {
@@ -767,10 +916,12 @@ static void clearVideo(void) {
 }
 
 void PLAT_quitVideo(void) {
-	clearVideo();
+	if (vid.renderer && vid.screen)
+		clearVideo();
 
 	// Make sure the GL context is current before tearing down textures/renderer
-	SDL_GL_MakeCurrent(vid.window, vid.gl_context);
+	if (vid.window && vid.gl_context)
+		SDL_GL_MakeCurrent(vid.window, vid.gl_context);
 
 	// Destroy textures while renderer is valid
 	if (vid.target) SDL_DestroyTexture(vid.target);

@@ -5,8 +5,13 @@
 
 ///////////////////////////////
 #include <SDL2/SDL.h>
+#ifdef USE_GLES
+#include <SDL2/SDL_opengles2.h>
+#include <GLES3/gl3.h>
+#else
 #include <SDL2/SDL_opengl.h>
 #include <SDL2/SDL_opengl_glext.h>
+#endif
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
 
