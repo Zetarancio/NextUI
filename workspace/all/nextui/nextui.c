@@ -2120,6 +2120,36 @@ static int editprefs_rows(void)
 	return editprefs.n_alts > 1 ? 2 : 1;
 }
 
+static void editprefs_blit_row(SDL_Surface *screen, int y, int selected, const char *label, const char *value)
+{
+	SDL_Rect row = {SCALE1(PADDING), y, screen->w - SCALE1(PADDING * 2), SCALE1(PILL_SIZE)};
+	SDL_Color color = selected ? COLOR_DARK_TEXT : COLOR_WHITE;
+	SDL_Surface *left;
+	SDL_Surface *right;
+	SDL_Rect dst;
+
+	if (selected)
+		GFX_blitPillLight(ASSET_BUTTON, screen, &row);
+	left = TTF_RenderUTF8_Blended(font.large, label, color);
+	right = TTF_RenderUTF8_Blended(font.large, value, color);
+	if (left) {
+		dst.x = row.x + SCALE1(BUTTON_PADDING);
+		dst.y = row.y + (row.h - left->h) / 2;
+		dst.w = left->w;
+		dst.h = left->h;
+		SDL_BlitSurface(left, NULL, screen, &dst);
+		SDL_FreeSurface(left);
+	}
+	if (right) {
+		dst.x = row.x + row.w - right->w - SCALE1(BUTTON_PADDING);
+		dst.y = row.y + (row.h - right->h) / 2;
+		dst.w = right->w;
+		dst.h = right->h;
+		SDL_BlitSurface(right, NULL, screen, &dst);
+		SDL_FreeSurface(right);
+	}
+}
+
 ///////////////////////////////////////
 
 static int previous_row = 0;
@@ -3188,21 +3218,20 @@ int main (int argc, char *argv[]) {
 
 			int ow = GFX_blitHardwareGroup(screen, show_setting);
 			if (currentScreen == SCREEN_EDITPREFS) {
-				char msg[512];
 				int rows = editprefs_rows();
+				int y = SCALE1(PADDING + PILL_SIZE + BUTTON_MARGIN);
 				const char *gov = edit_gov_names[editprefs.gov_i];
-				if (rows > 1)
-					snprintf(msg, sizeof(msg),
-						"%s\n\n%c Governor: %s\n%c Emulator: %s",
-						editprefs.title,
-						editprefs.row == 0 ? '>' : ' ', gov,
-						editprefs.row == 1 ? '>' : ' ',
-						editprefs.alts[editprefs.emu_i]);
-				else
-					snprintf(msg, sizeof(msg),
-						"%s\n\n> Governor: %s",
-						editprefs.title, gov);
-				GFX_blitMessage(font.large, msg, screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING + PILL_SIZE), screen->w - SCALE1(PADDING * 2), screen->h - SCALE1(PILL_SIZE * 3)});
+				SDL_Surface *title = TTF_RenderUTF8_Blended(font.large, editprefs.title, COLOR_WHITE);
+				if (title) {
+					SDL_Rect dst = {SCALE1(PADDING), SCALE1(PADDING), title->w, title->h};
+					SDL_BlitSurface(title, NULL, screen, &dst);
+					SDL_FreeSurface(title);
+				}
+				editprefs_blit_row(screen, y, editprefs.row == 0, "Governor", gov);
+				if (rows > 1) {
+					editprefs_blit_row(screen, y + SCALE1(PILL_SIZE + BUTTON_MARGIN),
+						editprefs.row == 1, "Emulator", editprefs.alts[editprefs.emu_i]);
+				}
 				GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 0);
 				GFX_blitButtonGroup((char*[]){ "X","INHERIT", "A","SAVE", NULL }, 1, screen, 1);
 				lastScreen = SCREEN_EDITPREFS;
