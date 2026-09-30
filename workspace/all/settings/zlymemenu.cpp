@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sys/wait.h>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -400,35 +401,44 @@ static int cleanup_count(const char *action, std::string *extra)
 		"zlyme-game-cleanup %s --dry-run 2>/dev/null", action);
 	FILE *f = popen(cmd, "r");
 	if (!f)
-		return 0;
+		return -1;
 	int n = 0;
+	bool saw = false;
 	char line[512];
 	std::string rest;
 	while (fgets(line, sizeof(line), f)) {
-		if (!strncmp(line, "COUNT=", 6))
+		if (!strncmp(line, "COUNT=", 6)) {
 			n = atoi(line + 6);
-		else
+			saw = true;
+		} else
 			rest += line;
 	}
-	pclose(f);
+	int status = pclose(f);
+	if (!saw || status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		return -1;
 	if (extra)
 		*extra = rest;
 	return n;
 }
 
-static void cleanup_run(const char *action)
+static bool cleanup_run(const char *action)
 {
 	char cmd[256];
 	snprintf(cmd, sizeof(cmd),
 		"zlyme-game-cleanup %s >/dev/null 2>&1", action);
-	system(cmd);
+	int status = system(cmd);
+	return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 static InputReactionHint cleanup_button(const char *action, const char *empty_msg, const char *ask_fmt)
 {
 	std::string extra;
 	int n = cleanup_count(action, &extra);
-	if (n <= 0) {
+	if (n < 0) {
+		MenuList::showOverlay("Scan failed", OverlayDismissMode::DismissOnA);
+		return NoOp;
+	}
+	if (n == 0) {
 		MenuList::showOverlay(empty_msg, OverlayDismissMode::DismissOnA);
 		return NoOp;
 	}
@@ -440,7 +450,10 @@ static InputReactionHint cleanup_button(const char *action, const char *empty_ms
 	}
 	if (!wait_ab_game(ask, "DELETE", "BACK"))
 		return NoOp;
-	cleanup_run(action);
+	if (!cleanup_run(action)) {
+		MenuList::showOverlay("Cleanup failed", OverlayDismissMode::DismissOnA);
+		return NoOp;
+	}
 	MenuList::showOverlay("Done", OverlayDismissMode::DismissOnA);
 	return NoOp;
 }
@@ -448,43 +461,43 @@ static InputReactionHint cleanup_button(const char *action, const char *empty_ms
 void Zlyme_appendGameCleanup(std::vector<AbstractMenuItem *> &items)
 {
 	items.push_back(new MenuItem{ListItemType::Button, "Clean junk",
-		"macOS ._ files, Windows Thumbs.db, desktop trash folders.",
+		"Remove desktop metadata and trash folders.",
 		[](AbstractMenuItem &item) -> InputReactionHint {
 			(void)item;
 			return cleanup_button("junk", "No junk files", "Delete %d junk files?");
 		}});
 	items.push_back(new MenuItem{ListItemType::Button, "Orphan saves / states",
-		"Saves on a card whose ROM is gone from that same card.",
+		"Remove saves whose ROM is missing from that same card.",
 		[](AbstractMenuItem &item) -> InputReactionHint {
 			(void)item;
 			return cleanup_button("orphan-saves", "No orphan saves", "Delete %d orphan save files?");
 		}});
 	items.push_back(new MenuItem{ListItemType::Button, "Orphan boxart",
-		".media images whose ROM is gone.",
+		"Remove artwork whose ROM is missing.",
 		[](AbstractMenuItem &item) -> InputReactionHint {
 			(void)item;
 			return cleanup_button("orphan-media", "No orphan boxart", "Delete %d orphan images?");
 		}});
 	items.push_back(new MenuItem{ListItemType::Button, "Clear Recents",
-		"Empty the Recently Played list.",
+		"Clear the Recently Played list.",
 		[](AbstractMenuItem &item) -> InputReactionHint {
 			(void)item;
 			return cleanup_button("recents", "Recents already empty", "Clear %d recent entries?");
 		}});
 	items.push_back(new MenuItem{ListItemType::Button, "Reset RetroArch core options",
-		"Delete OS /storage/.config/retroarch/config. Saves stay.",
+		"Reset per-core RetroArch options.",
 		[](AbstractMenuItem &item) -> InputReactionHint {
 			(void)item;
 			return cleanup_button("ra-cores", "No core options", "Delete %d RetroArch option files?");
 		}});
-	items.push_back(new MenuItem{ListItemType::Button, "Reset standalones",
-		"Wipe PPSSPP, Flycast, Dolphin, DraStic, AetherSX2, GZDoom, Pico-8-native, Wine prefix on the OS card.",
+	items.push_back(new MenuItem{ListItemType::Button, "Reset standalone settings",
+		"Reset settings for standalone emulators. Games and saves are kept.",
 		[](AbstractMenuItem &item) -> InputReactionHint {
 			(void)item;
-			return cleanup_button("standalones", "No standalone cfg", "Reset %d standalone cfg trees?");
+			return cleanup_button("standalones", "No standalone settings", "Reset %d standalone settings?");
 		}});
 	items.push_back(new MenuItem{ListItemType::Button, "Orphan per-ROM RetroArch configs",
-		"Drop OS retroarch Game.cfg files whose ROM is gone.",
+		"Remove per-ROM RetroArch configs whose ROM is missing.",
 		[](AbstractMenuItem &item) -> InputReactionHint {
 			(void)item;
 			return cleanup_button("ra-rom-cfg", "No orphan RA configs", "Delete %d per-ROM configs?");
