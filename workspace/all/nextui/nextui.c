@@ -1214,6 +1214,79 @@ static void addEntriesMergeDirs(Array* entries, char* path) {
 	}
 }
 
+/* Splore writes downloaded carts under Pico-8-native/bbs/carts.
+ * They stay owned by native PICO-8. This only lists them. */
+static void addPicoBbsCarts(Array *entries) {
+	char dir[MAX_PATH];
+	DIR *dh;
+	struct dirent *dp;
+	snprintf(dir, sizeof(dir), "%s/Pico-8-native/bbs/carts", SHARED_USERDATA_PATH);
+	dh = opendir(dir);
+	if (!dh)
+		return;
+	while ((dp = readdir(dh)) != NULL) {
+		char full[MAX_PATH];
+		char stem[256];
+		char title[256];
+		char *cut;
+		if (hide(dp->d_name))
+			continue;
+		if (!suffixMatch(".p8.png", dp->d_name) && !suffixMatch(".p8", dp->d_name))
+			continue;
+		snprintf(full, sizeof(full), "%s/%s", dir, dp->d_name);
+		if (!exists(full))
+			continue;
+		snprintf(stem, sizeof(stem), "%s", dp->d_name);
+		cut = strstr(stem, ".p8");
+		if (cut)
+			*cut = '\0';
+		snprintf(title, sizeof(title), "%s", dp->d_name);
+		{
+			DIR *nh = opendir(dir);
+			struct dirent *np;
+			if (nh) {
+				while ((np = readdir(nh)) != NULL) {
+					char nfo[MAX_PATH];
+					FILE *nf;
+					char line[256];
+					int lid_ok = 0;
+					char got[256];
+					if (!suffixMatch(".nfo", np->d_name))
+						continue;
+					snprintf(nfo, sizeof(nfo), "%s/%s", dir, np->d_name);
+					nf = fopen(nfo, "r");
+					if (!nf)
+						continue;
+					got[0] = '\0';
+					while (fgets(line, sizeof(line), nf)) {
+						char *nl = strchr(line, '\n');
+						if (nl) *nl = '\0';
+						if (prefixMatch("lid:", line) && exactMatch(line + 4, stem))
+							lid_ok = 1;
+						if (prefixMatch("title:", line) && line[6])
+							snprintf(got, sizeof(got), "%s", line + 6);
+					}
+					fclose(nf);
+					if (lid_ok && got[0]) {
+						snprintf(title, sizeof(title), "%s", got);
+						break;
+					}
+				}
+				closedir(nh);
+			}
+		}
+		{
+			Entry *e = Entry_new(full, ENTRY_ROM);
+			if (e && strcmp(title, dp->d_name) != 0) {
+				free(e->name);
+				e->name = strdup(title);
+			}
+			Array_push(entries, e);
+		}
+	}
+	closedir(dh);
+}
+
 static Array* getEntries(char* path){
 	Array* entries = Array_new();
 	char tag[MAX_PATH];
@@ -1257,6 +1330,9 @@ static Array* getEntries(char* path){
 
 	if (entries->count == 0)
 		addEntries(entries, path);
+
+	if (exactMatch(tag, "PICO") && !rel[0])
+		addPicoBbsCarts(entries);
 
 	EntryArray_sort(entries);
 	return entries;
@@ -2887,7 +2963,7 @@ int main (int argc, char *argv[]) {
 			int delete_row = editprefs.path[0] ? rows : -1;
 			int total_rows = rows + (delete_row >= 0);
 			if (editprefs.confirm) {
-				if (PAD_justPressed(BTN_B) || PAD_tappedMenu(now)) {
+				if (PAD_justPressed(BTN_B)) {
 					editprefs.confirm = 0;
 					dirty = 1;
 				} else if (PAD_justPressed(BTN_A)) {
@@ -2915,11 +2991,13 @@ int main (int argc, char *argv[]) {
 					editprefs.confirm = 0;
 					editprefs.open = 0;
 					currentScreen = SCREEN_GAMELIST;
+					folderbgchanged = 1;
 					dirty = 1;
 				}
-			} else if (PAD_justPressed(BTN_B) || PAD_tappedMenu(now)) {
+			} else if (PAD_justPressed(BTN_B)) {
 				editprefs.open = 0;
 				currentScreen = SCREEN_GAMELIST;
+				folderbgchanged = 1;
 				dirty = 1;
 			} else if (PAD_justPressed(BTN_A) && editprefs.row == delete_row) {
 				editprefs.confirm = 1;
@@ -2928,11 +3006,13 @@ int main (int argc, char *argv[]) {
 				editprefs_save();
 				editprefs.open = 0;
 				currentScreen = SCREEN_GAMELIST;
+				folderbgchanged = 1;
 				dirty = 1;
 			} else if (PAD_justPressed(BTN_X)) {
 				prefsClear(editprefs.kind, editprefs.tag, editprefs.rel);
 				editprefs.open = 0;
 				currentScreen = SCREEN_GAMELIST;
+				folderbgchanged = 1;
 				dirty = 1;
 			} else if (PAD_justPressed(BTN_UP)) {
 				editprefs.row = (editprefs.row + total_rows - 1) % total_rows;
@@ -3677,7 +3757,10 @@ int main (int argc, char *argv[]) {
 				// buttons
 				if (show_setting && !GetHDMI()) {
 					GFX_blitHardwareHints(screen, show_setting);
-					GFX_blitButtonGroup((char*[]){ "Y","EDIT", NULL }, 1, screen, 1);
+					/* Y opens edit preferences from the game list.
+					 * Volume (2) has no edit target. */
+					if (show_setting == 1)
+						GFX_blitButtonGroup((char*[]){ "Y","EDIT", NULL }, 1, screen, 1);
 				} else {
 					if (can_resume) GFX_blitButtonGroup((char*[]){ "X","RESUME",  NULL }, 0, screen, 0);
 					else GFX_blitButtonGroup((char*[]){
