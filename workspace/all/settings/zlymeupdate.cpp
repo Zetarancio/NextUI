@@ -50,6 +50,7 @@ struct ReleaseMeta {
     std::string tar_url;
     long tar_id = 0;
     long long tar_size = 0;
+    long long need_bytes = 0;
     std::string sha_name;
     std::string sha_url;
     long sha_id = 0;
@@ -353,6 +354,8 @@ ReleaseMeta parse_meta(const std::string &text)
             m.tar_id = strtol(v.c_str(), nullptr, 10);
         else if (k == "TAR_SIZE")
             m.tar_size = strtoll(v.c_str(), nullptr, 10);
+        else if (k == "NEED_BYTES")
+            m.need_bytes = strtoll(v.c_str(), nullptr, 10);
         else if (k == "SHA_NAME")
             m.sha_name = v;
         else if (k == "SHA_URL")
@@ -639,9 +642,9 @@ InputReactionHint do_download(AbstractMenuItem &item)
         }
     }
 
-    long long need = g_rel.tar_size + kSlackBytes;
+    long long need = g_rel.need_bytes > 0 ? g_rel.need_bytes : g_rel.tar_size + kSlackBytes;
     long long freeb = storage_free();
-    if (g_rel.tar_size > 0 && freeb < need) {
+    if ((g_rel.tar_size > 0 || g_rel.need_bytes > 0) && freeb < need) {
         overlay_ok("Not enough space on ZLYME.\nNeed " + fmt_mb(need) + ", free " + fmt_mb(freeb));
         return NoOp;
     }
