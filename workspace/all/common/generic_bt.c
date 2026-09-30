@@ -21,6 +21,13 @@
 
 #include <pthread.h>
 #include <unistd.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <dirent.h>
+#include <limits.h>
+#include <sys/wait.h>
 
 bool PLAT_hasBluetooth() { return true; }
 bool PLAT_bluetoothEnabled() { return CFG_getBluetooth(); }
@@ -91,30 +98,14 @@ static pthread_mutex_t discovered_devices_mtx = PTHREAD_MUTEX_INITIALIZER;
 static volatile bool bt_discovering = false;
 static volatile bool bt_initialized = false;
 
-// Helper to run a command and capture output
+// Helper to run a command and capture output. bluetoothctl has no
+// deadline on this BusyBox; a hung D-Bus call froze NextUI's UI thread.
+#define BT_CMD_MS 2000
+#define BT_RADIO_MS 8000
+#define BT_START_MS 15000
+
 static int bt_run_cmd(const char *cmd, char *output, size_t output_len) {
-	btlog("Running command: %s\n", cmd);
-	FILE *fp = popen(cmd, "r");
-	if (!fp) {
-		LOG_error("Failed to run command: %s\n", cmd);
-		return -1;
-	}
-	
-	if (output && output_len > 0) {
-		output[0] = '\0';
-		size_t total = 0;
-		char buf[256];
-		while (fgets(buf, sizeof(buf), fp) && total < output_len - 1) {
-			size_t len = strlen(buf);
-			if (total + len < output_len) {
-				strcpy(output + total, buf);
-				total += len;
-			}
-		}
-	}
-	
-	int status = pclose(fp);
-	return WEXITSTATUS(status);
+	return runCmdTimeout(cmd, output, output_len, BT_CMD_MS);
 }
 
 // Helper to add device to discovered list
@@ -266,25 +257,40 @@ void PLAT_bluetoothInit() {
 
 void PLAT_bluetoothDeinit() {
 	if (bt_initialized) {
+		PLAT_bluetoothDiscovery(0);
 		bt_clear_discovered_devices();
 		bt_initialized = false;
 	}
 }
 
-void PLAT_bluetoothEnable(bool shouldBeOn) {
-	if (shouldBeOn) {
+static pthread_mutex_t bt_radio_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void *bt_radio_apply(void *arg)
+{
+	int on = (int)(intptr_t)arg;
+	pthread_mutex_lock(&bt_radio_lock);
+	if (on) {
 		btlog("Turning BT on...\n");
-		system(SYSTEM_PATH "/etc/bluetooth/bt_init.sh start");
+		runCmdTimeout(SYSTEM_PATH "/etc/bluetooth/bt_init.sh start", NULL, 0, BT_START_MS);
 	} else {
 		btlog("Turning BT off...\n");
-		// Stop discovery if active
-		if (bt_discovering) {
-			//system("bluetoothctl scan off 2>/dev/null");
-			bt_discovering = false;
-		}
-		system(SYSTEM_PATH "/etc/bluetooth/bt_init.sh stop");
+		/* Upstream NextUI does not wait on `bluetoothctl scan off` here;
+		 * that command never returns on BlueZ 5 when scan is idle, and
+		 * QuickMenu froze on the UI thread. D-Bus + kill is enough. */
+		PLAT_bluetoothDiscovery(0);
+		runCmdTimeout(SYSTEM_PATH "/etc/bluetooth/bt_init.sh stop", NULL, 0, BT_RADIO_MS);
 	}
+	pthread_mutex_unlock(&bt_radio_lock);
+	return NULL;
+}
+
+void PLAT_bluetoothEnable(bool shouldBeOn) {
 	CFG_setBluetooth(shouldBeOn);
+	pthread_t t;
+	if (pthread_create(&t, NULL, bt_radio_apply, (void *)(intptr_t)shouldBeOn) == 0)
+		pthread_detach(t);
+	else
+		bt_radio_apply((void *)(intptr_t)shouldBeOn);
 }
 
 bool PLAT_bluetoothDiagnosticsEnabled() { 
@@ -298,24 +304,16 @@ void PLAT_bluetoothDiagnosticsEnable(bool on) {
 void PLAT_bluetoothDiscovery(int on) {
 	if (on) {
 		btlog("Starting BT discovery.\n");
-		// Clear old discovered devices
 		bt_clear_discovered_devices();
-		
-		// Start scanning - version-dependent command
-		if (bt_version_gte(5, 70)) {
-			// In 5.70+, timeout option works differently
-			// Start scan in background and schedule auto-stop
-			system("sh -c 'bluetoothctl scan on 2>/dev/null & BT_PID=$!; sleep 60; bluetoothctl scan off 2>/dev/null; kill $BT_PID 2>/dev/null' &");
-		} else {
-			// For 5.54 and similar versions
-			system("bluetoothctl --timeout 60 scan on 2>/dev/null &");
-		}
+		/* dbus, not a leftover bluetoothctl. 8733bu drops HID
+		 * while scan is running (ROCKNIX sleep.sh / Spruce stop). */
+		runCmdTimeout("dbus-send --system --type=method_call --dest=org.bluez /org/bluez/hci0 org.bluez.Adapter1.StartDiscovery >/dev/null 2>&1", NULL, 0, 1000);
 		bt_discovering = true;
 	} else {
 		btlog("Stopping BT discovery.\n");
-		system("bluetoothctl scan off 2>/dev/null");
-		// Also try to kill any background scan processes
-		system("pkill -f 'bluetoothctl scan on' 2>/dev/null");
+		runCmdTimeout("dbus-send --system --type=method_call --dest=org.bluez /org/bluez/hci0 org.bluez.Adapter1.StopDiscovery >/dev/null 2>&1", NULL, 0, 1000);
+		/* Do not `bluetoothctl scan off` — it blocks forever. */
+		runCmdTimeout("killall -9 bluetoothctl >/dev/null 2>&1", NULL, 0, 500);
 		bt_discovering = false;
 	}
 }
@@ -459,28 +457,36 @@ void PLAT_bluetoothPair(char *addr) {
 	
 	// Trust the device first (for automatic reconnection)
 	snprintf(cmd, sizeof(cmd), "bluetoothctl trust %s 2>/dev/null", addr);
-	system(cmd);
+	runCmdTimeout(cmd, NULL, 0, BT_RADIO_MS);
 	
-	// Small delay to ensure trust command completes
-	usleep(100000);
-	
-	// Pair with the device
 	snprintf(cmd, sizeof(cmd), "bluetoothctl pair %s 2>/dev/null", addr);
-	int ret = system(cmd);
-	if (ret != 0) {
+	int ret = runCmdTimeout(cmd, NULL, 0, BT_RADIO_MS);
+	if (ret != 0 && ret != 124) {
 		LOG_error("BT pair failed: %d\n", ret);
-		// In newer versions, try alternative pairing method
 		if (bt_version_gte(5, 70)) {
 			snprintf(cmd, sizeof(cmd), "echo 'pair %s' | bluetoothctl 2>/dev/null", addr);
-			ret = system(cmd);
-			if (ret != 0) {
+			ret = runCmdTimeout(cmd, NULL, 0, BT_RADIO_MS);
+			if (ret != 0)
 				LOG_error("BT pair (alternative method) failed: %d\n", ret);
-			}
 		}
 	}
 	
-	// Remove from discovered list since it's now paired
 	bt_remove_discovered_device(addr);
+
+	snprintf(cmd, sizeof(cmd), "bluetoothctl connect %s 2>/dev/null", addr);
+	runCmdTimeout(cmd, NULL, 0, BT_RADIO_MS);
+	{
+		char info[2048];
+		int i;
+		for (i = 0; i < 5; i++) {
+			snprintf(cmd, sizeof(cmd), "bluetoothctl info %s 2>/dev/null", addr);
+			if (bt_run_cmd(cmd, info, sizeof(info)) == 0 &&
+			    strstr(info, "Connected: yes"))
+				break;
+			usleep(200000);
+		}
+	}
+	runCmdTimeout("zlyme-bluetooth save >/dev/null 2>&1", NULL, 0, BT_CMD_MS);
 }
 
 void PLAT_bluetoothUnpair(char *addr) {
@@ -488,16 +494,29 @@ void PLAT_bluetoothUnpair(char *addr) {
 	
 	char cmd[256];
 	
-	// Disconnect first if connected
 	snprintf(cmd, sizeof(cmd), "bluetoothctl disconnect %s 2>/dev/null", addr);
-	system(cmd);
+	runCmdTimeout(cmd, NULL, 0, BT_RADIO_MS);
 	
-	// Remove the device (this unpairs it)
 	snprintf(cmd, sizeof(cmd), "bluetoothctl remove %s 2>/dev/null", addr);
-	int ret = system(cmd);
-	if (ret != 0) {
+	int ret = runCmdTimeout(cmd, NULL, 0, BT_RADIO_MS);
+	if (ret != 0 && ret != 124)
 		LOG_error("BT unpair failed\n");
-	}
+	runCmdTimeout("zlyme-bluetooth save >/dev/null 2>&1", NULL, 0, BT_CMD_MS);
+}
+
+static int bt_addr_is_audio(const char *addr)
+{
+	char cmd[320];
+	char output[4096];
+
+	if (!addr || !addr[0])
+		return 0;
+	snprintf(cmd, sizeof(cmd), "bluetoothctl info %s 2>/dev/null", addr);
+	if (bt_run_cmd(cmd, output, sizeof(output)) != 0)
+		return 0;
+	if (strstr(output, "0000110b") || strstr(output, "Audio Sink") || strstr(output, "A2DP"))
+		return 1;
+	return 0;
 }
 
 void PLAT_bluetoothConnect(char *addr) {
@@ -505,11 +524,12 @@ void PLAT_bluetoothConnect(char *addr) {
 	
 	char cmd[256];
 	snprintf(cmd, sizeof(cmd), "bluetoothctl connect %s 2>/dev/null", addr);
-	int ret = system(cmd);
-	if (ret != 0) {
-		LOG_error("BT connect failed: %d\n", ret);
+	runCmdTimeout(cmd, NULL, 0, BT_RADIO_MS);
+	/* bluetoothctl often returns 1 after a successful connect. */
+	if (bt_addr_is_audio(addr)) {
+		runCmdTimeout("zlyme-audio set bt >/dev/null 2>&1", NULL, 0, BT_CMD_MS);
+		SetAudioSink(AUDIO_SINK_BLUETOOTH);
 	}
-	LOG_info("BT connect returned: %d\n", ret);
 }
 
 void PLAT_bluetoothDisconnect(char *addr) {
@@ -517,36 +537,26 @@ void PLAT_bluetoothDisconnect(char *addr) {
 	
 	char cmd[256];
 	snprintf(cmd, sizeof(cmd), "bluetoothctl disconnect %s 2>/dev/null", addr);
-	int ret = system(cmd);
-	if (ret != 0) {
+	int ret = runCmdTimeout(cmd, NULL, 0, BT_RADIO_MS);
+	if (ret != 0 && ret != 124)
 		LOG_error("BT disconnect failed: %d\n", ret);
-	}
+	/* zlyme-btsink recomputes HDMI-if-ELD else codec. Do not force codec. */
 }
 
 bool PLAT_bluetoothConnected() {
-	// Check for any active ACL connections using hcitool
-	FILE *fp;
-	char buffer[256];
+	DIR *dir = opendir("/sys/class/bluetooth");
+	struct dirent *de;
 	bool connected = false;
 
-	fp = popen("hcitool con 2>/dev/null", "r");
-	if (fp == NULL) {
-		// Fallback: check bluetoothctl
-		char output[2048];
-		if (bt_run_cmd("bluetoothctl info 2>/dev/null | grep 'Connected: yes'", output, sizeof(output)) == 0) {
-			return strstr(output, "Connected: yes") != NULL;
-		}
+	if (!dir)
 		return false;
-	}
-
-	while (fgets(buffer, sizeof(buffer), fp) != NULL) {
-		if (strstr(buffer, "ACL")) {
+	while ((de = readdir(dir))) {
+		if (strchr(de->d_name, ':')) {
 			connected = true;
 			break;
 		}
 	}
-
-	pclose(fp);
+	closedir(dir);
 	return connected;
 }
 
@@ -574,7 +584,7 @@ void PLAT_bluetoothSetVolume(int vol) {
 	char cmd[256];
 	// Try to set bluealsa volume
 	snprintf(cmd, sizeof(cmd), "amixer -D bluealsa set 'A2DP' %d%% 2>/dev/null", vol);
-	system(cmd);
+	runCmdTimeout(cmd, NULL, 0, BT_CMD_MS);
 	
 	btlog("Set BT volume: %d\n", vol);
 }
@@ -598,6 +608,15 @@ static char watched_file_path[MAX_PATH];
 
 // Function to detect audio device type from .asoundrc content
 static int detect_audio_device_type() {
+	const char *sink = getenv("ZLYME_SINK");
+	if (sink && sink[0]) {
+		if (strcmp(sink, "bt") == 0)
+			return AUDIO_SINK_BLUETOOTH;
+		if (strcmp(sink, "hdmi") == 0)
+			return AUDIO_SINK_HDMI;
+		return AUDIO_SINK_DEFAULT;
+	}
+
     FILE *file = fopen(watched_file_path, "r");
     if (!file) {
 		//LOG_info("detect_audio_device_type: .asoundrc not found, defaulting to AUDIO_SINK_DEFAULT\n");

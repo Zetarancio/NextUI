@@ -13,13 +13,13 @@ typedef std::shared_lock<Lock> ReadLock;
 using namespace Wifi;
 using namespace std::placeholders;
 
-Menu::Menu(const int &globalQuit, int &globalDirty) : MenuList(MenuItemType::Fixed, "Network", {}), globalQuit(globalQuit), globalDirty(globalDirty)
+Menu::Menu(const int &globalQuit, int &globalDirty) : MenuList(MenuItemType::Fixed, "WiFi", {}), globalQuit(globalQuit), globalDirty(globalDirty)
 {
-    toggleItem = new MenuItem(ListItemType::Generic, "WiFi", "Enable/disable WiFi", {false, true}, {"Off", "On"},
+    toggleItem = new MenuItem(ListItemType::Generic, "WiFi", "Radio on or off. Leave this on to scan and connect.", {false, true}, {"Off", "On"},
                               std::bind(&Menu::getWifToggleState, this),
                               std::bind(&Menu::setWifiToggleState, this, std::placeholders::_1),
                               std::bind(&Menu::resetWifiToggleState, this));
-    diagItem = new MenuItem(ListItemType::Generic, "WiFi diagnostics", "Enable/disable WiFi logging", {false, true}, {"Off", "On"},
+    diagItem = new MenuItem(ListItemType::Generic, "WiFi diagnostics", "Write extra WiFi logs.", {false, true}, {"Off", "On"},
                               std::bind(&Menu::getWifDiagnosticsState, this),
                               std::bind(&Menu::setWifiDiagnosticsState, this, std::placeholders::_1),
                               std::bind(&Menu::resetWifiDiagnosticsState, this));
@@ -29,8 +29,8 @@ Menu::Menu(const int &globalQuit, int &globalDirty) : MenuList(MenuItemType::Fix
     // best effort layout based on the platform defines, user should really call performLayout manually
     MenuList::performLayout((SDL_Rect){0, 0, FIXED_WIDTH, FIXED_HEIGHT});
     layout_called = false;
-
-    worker = std::thread{&Menu::updater, this};
+    /* Scan from handleInput. Constructing Settings used to start a
+     * wpa scan on the main menu (FAIL-BUSY every two seconds). */
 }
 
 Menu::~Menu()
@@ -42,6 +42,10 @@ Menu::~Menu()
 
 InputReactionHint Menu::handleInput(int &dirty, int &quit)
 {
+    if (!workerStarted) {
+        workerStarted = true;
+        worker = std::thread{&Menu::updater, this};
+    }
     auto ret = MenuList::handleInput(dirty, quit);
     if (selectionDirty)
     {
@@ -94,54 +98,67 @@ bool key_compare(Map const &lhs, Map const &rhs)
 
 void Menu::updater()
 {
-    int pollSecs = 15;
+    int pollSecs = 2;
+    std::map<std::string, WIFI_network> prevSsids;
+    std::string prevConn;
 
     while (!quit && !globalQuit)
     {
-        // TODO: pause when menu is not rendered
         if (WIFI_enabled())
         {
-            // scan for available networks and add a menu item for each
             WIFI_connection connection;
-            if(WIFI_connectionInfo(&connection) < 0)
-                continue; // try again in a bit
+            if (WIFI_connectionInfo(&connection) < 0)
+            {
+                std::this_thread::sleep_for(std::chrono::seconds(pollSecs));
+                continue;
+            }
 
-            // grab list and compare it to previous result
-            // only relayout the menu if changes happended
             std::vector<WIFI_network> scanResults(SCAN_MAX_RESULTS);
             int cnt = WIFI_scan(scanResults.data(), SCAN_MAX_RESULTS);
-            if(cnt < 0)
-                continue; // try again in a bit
+            if (cnt < 0)
+            {
+                std::this_thread::sleep_for(std::chrono::seconds(pollSecs));
+                continue;
+            }
 
             std::map<std::string, WIFI_network> scanSsids;
             for (int i = 0; i < cnt; i++)
                 scanSsids.emplace(scanResults[i].ssid, scanResults[i]);
 
-            // dont repopulate if any submenu is open
+            std::string connKey = std::string(connection.ssid) + "|" + std::string(connection.ip);
+            bool sameScan = key_compare(prevSsids, scanSsids) && prevConn == connKey;
+
             bool menuOpen = false;
-            for(auto i : items)
             {
-                if(i->isDeferred())
+                ReadLock r(itemLock);
+                for (auto i : items)
                 {
-                    menuOpen = true;
-                    break;
+                    if (i->isDeferred())
+                    {
+                        menuOpen = true;
+                        break;
+                    }
                 }
             }
 
-            // something changed?
-            if (!menuOpen)
+            if (!menuOpen && !sameScan)
             {
-                // remember selection and restore
                 std::string selectedName;
                 bool selectionApplied = false;
+                std::vector<AbstractMenuItem *> stale;
 
                 {
                     WriteLock w(itemLock);
                     selectedName = getSelectedItemName();
+                    for (auto *i : items)
+                    {
+                        bool keep = (i == toggleItem || i == diagItem);
+                        if (!keep)
+                            stale.push_back(i);
+                    }
                     items.clear();
                     items.push_back(toggleItem);
                     items.push_back(diagItem);
-                    layout_called = false;
 
                     for (auto &[s, r] : scanSsids)
                     {
@@ -160,44 +177,73 @@ void Menu::updater()
                                                                     { WIFI_disconnect(); selectionDirty = true; return Exit; }},
                                                     new ForgetItem(r, selectionDirty)
                                                 });
-                        else 
-                        if (hasCredentials)
+                        else if (hasCredentials)
                             options = new MenuList(MenuItemType::List, "Options", { new ConnectKnownItem(r, selectionDirty), new ForgetItem(r, selectionDirty) });
+                        else if (r.security == SECURITY_NONE)
+                            options = new MenuList(MenuItemType::List, "Options", { new ConnectKnownItem(r, selectionDirty) });
                         else
                             options = new MenuList(MenuItemType::List, "Options", { new ConnectNewItem(r, selectionDirty) });
 
                         auto itm = new NetworkItem{r, connected, options};
-                        if(connected && !std::string(connection.ip).empty())
+                        if (connected && !std::string(connection.ip).empty())
                             itm->setDesc(std::string(r.bssid) + " | " + std::string(connection.ip));
                         items.push_back(itm);
                     }
                 }
+                for (auto *i : stale)
+                    delete i;
                 MenuList::performLayout((SDL_Rect){0, 0, FIXED_WIDTH, FIXED_HEIGHT});
 
-                // Attempt to restore prev selection
                 selectionApplied = selectByName(selectedName);
                 globalDirty |= selectionApplied;
-                // If selection was restored, we already called performLayout internally
                 selectionDirty |= !selectionApplied;
+                prevSsids = scanSsids;
+                prevConn = connKey;
             }
             pollSecs = 2;
         }
         else
         {
-            WriteLock w(itemLock);
-            items.clear();
-            items.push_back(toggleItem);
-            items.push_back(diagItem);
-            layout_called = false;
-            selectionDirty = true;
+            bool menuOpen = false;
+            {
+                ReadLock r(itemLock);
+                for (auto i : items)
+                {
+                    if (i->isDeferred())
+                    {
+                        menuOpen = true;
+                        break;
+                    }
+                }
+            }
+            if (!menuOpen)
+            {
+                std::vector<AbstractMenuItem *> stale;
+                {
+                    WriteLock w(itemLock);
+                    for (auto *i : items)
+                    {
+                        bool keep = (i == toggleItem || i == diagItem);
+                        if (!keep)
+                            stale.push_back(i);
+                    }
+                    items.clear();
+                    items.push_back(toggleItem);
+                    items.push_back(diagItem);
+                    selectionDirty = true;
+                    prevSsids.clear();
+                    prevConn.clear();
+                }
+                for (auto *i : stale)
+                    delete i;
+            }
             pollSecs = 15;
         }
 
-        // reset selection scope (locks internally)
         if (selectionDirty)
         {
             MenuList::performLayout((SDL_Rect){0, 0, FIXED_WIDTH, FIXED_HEIGHT});
-            selectionDirty = false;        
+            selectionDirty = false;
         }
 
         std::this_thread::sleep_for(std::chrono::seconds(pollSecs));
@@ -214,12 +260,17 @@ ConnectKnownItem::ConnectKnownItem(WIFI_network n, bool& dirty)
 {}
 
 ConnectNewItem::ConnectNewItem(WIFI_network n, bool& dirty)
-    : MenuItem(ListItemType::Button, "Enter WiFi passcode", "Connect to this network.", DeferToSubmenu, new KeyboardPrompt("Enter Wifi passcode", 
+    : MenuItem(ListItemType::Button, "Enter WiFi passcode", "B back. X or on-screen enter confirms. L1 backspace.", DeferToSubmenu, new KeyboardPrompt("Enter WiFi passcode", 
         [&](AbstractMenuItem &item) -> InputReactionHint {
+            std::string pass = item.getName();
+            if (net.security != SECURITY_NONE && pass.size() < 8) {
+                MenuList::showOverlay("Password needs 8+ characters", OverlayDismissMode::DismissOnA);
+                return NoOp;
+            }
             ScopedOverlay overlay("Connecting...");
-            WIFI_connectPass(net.ssid, net.security, item.getName().c_str()); 
+            WIFI_connectPass(net.ssid, net.security, pass.c_str());
             dirty = true;
-            return Exit; 
+            return Exit;
         })), net(n)
 {}
 
@@ -240,15 +291,12 @@ NetworkItem::NetworkItem(WIFI_network n, bool connected, MenuList* submenu)
 void NetworkItem::drawCustomItem(SDL_Surface *surface, const SDL_Rect &dst, const AbstractMenuItem &item, bool selected) const
 {
     SDL_Color text_color = uintToColour(THEME_COLOR4_255);
-    SDL_Surface *text = TTF_RenderUTF8_Blended(font.tiny, item.getLabel().c_str(), COLOR_WHITE); // always white
-
-    // hack - this should be correlated to max_width
     int mw = dst.w;
 
     if (selected)
     {
         // gray pill
-        GFX_blitPillLightCPP(ASSET_BUTTON, surface, {dst.x, dst.y, mw, SCALE1(BUTTON_SIZE)});
+        GFX_blitPillLightCPP(ASSET_BUTTON, surface, nativeButtonRect(dst.x, dst.y, mw, dst.h));
     }
 
     // wifi icon
@@ -258,7 +306,7 @@ void NetworkItem::drawCustomItem(SDL_Surface *surface, const SDL_Rect &dst, cons
                         : ASSET_WIFI_LOW; // -71 and below
     SDL_Rect rect = {0, 0, 12, 12};
     int ix = dst.x + dst.w - SCALE1(OPTION_PADDING + rect.w);
-    int y = dst.y + SCALE1(BUTTON_SIZE - rect.h) / 2;
+    int y = dst.y + SCALE1(PILL_SIZE - rect.h) / 2;
     SDL_Rect tgt{ix, y};
     GFX_blitAssetColor(asset, NULL, surface, &tgt, THEME_COLOR6);
 
@@ -266,7 +314,7 @@ void NetworkItem::drawCustomItem(SDL_Surface *surface, const SDL_Rect &dst, cons
     if(connected) {
         SDL_Rect rect = {0, 0, 12, 12};
         ix = ix - SCALE1(OPTION_PADDING + rect.w);
-        int y = dst.y + SCALE1(BUTTON_SIZE - rect.h) / 2;
+        int y = dst.y + SCALE1(PILL_SIZE - rect.h) / 2;
         SDL_Rect tgt{ix, y};
         GFX_blitAssetColor(ASSET_CHECKCIRCLE, NULL, surface, &tgt, THEME_COLOR6);
     }
@@ -274,7 +322,7 @@ void NetworkItem::drawCustomItem(SDL_Surface *surface, const SDL_Rect &dst, cons
     else if(net.security != SECURITY_NONE) {
         SDL_Rect rect = {0, 0, 8, 11};
         ix = ix - SCALE1(OPTION_PADDING + rect.w + 2);
-        int y = dst.y + SCALE1(BUTTON_SIZE - rect.h) / 2;
+        int y = dst.y + SCALE1(PILL_SIZE - rect.h) / 2;
         SDL_Rect tgt{ix, y};
         GFX_blitAssetColor(ASSET_LOCK, NULL, surface, &tgt, THEME_COLOR6);
     }
@@ -283,13 +331,13 @@ void NetworkItem::drawCustomItem(SDL_Surface *surface, const SDL_Rect &dst, cons
     {
         // white pill
         int w = 0;
-        TTF_SizeUTF8(font.small, item.getName().c_str(), &w, NULL);
+        TTF_SizeUTF8(font.large, item.getName().c_str(), &w, NULL);
         w += SCALE1(OPTION_PADDING * 2);
-        GFX_blitPillDarkCPP(ASSET_BUTTON, surface, {dst.x, dst.y, w, SCALE1(BUTTON_SIZE)});
+        GFX_blitPillDarkCPP(ASSET_BUTTON, surface, nativeButtonRect(dst.x, dst.y, w, dst.h));
         text_color = uintToColour(THEME_COLOR5_255);
     }
 
-    text = TTF_RenderUTF8_Blended(font.small, item.getName().c_str(), text_color);
+    SDL_Surface *text = TTF_RenderUTF8_Blended(font.large, item.getName().c_str(), text_color);
     SDL_BlitSurfaceCPP(text, {}, surface, {dst.x + SCALE1(OPTION_PADDING), dst.y + SCALE1(1)});
     SDL_FreeSurface(text);
 }
