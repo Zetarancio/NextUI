@@ -19,6 +19,15 @@ extern "C"
 // leftovers to port
 #define OPTION_PADDING 8
 
+// ASSET_BUTTON is native BUTTON_SIZE (20) tall. Stretching it to PILL_SIZE
+// (30) wrecks the 9-slice. Keep the row stride at PILL_SIZE for font.large.
+inline SDL_Rect nativeButtonRect(int x, int y, int w, int row_h)
+{
+    int h = SCALE1(BUTTON_SIZE);
+    int yy = y + (row_h - h) / 2;
+    return {x, yy, w, h};
+}
+
 // c++ compat/convenience
 // MinUI is passing a lot of temp value ptrs, which is not very c++
 inline bool rectIsNull(const SDL_Rect &rect)
@@ -125,7 +134,8 @@ enum class OverlayDismissMode
 {
     None,
     DismissOnA,
-    DismissOnB
+    DismissOnB,
+    ConfirmAB
 };
 
 class AbstractMenuItem;
@@ -170,7 +180,8 @@ public:
         : type(type), name(name), desc(desc), on_get(on_get), on_set(on_set), 
         on_reset(on_reset), on_confirm(on_confirm), submenu(submenu) {}
     ~AbstractMenuItem() {
-         // delete submenu;
+         delete submenu;
+         submenu = nullptr;
     }
 
     virtual const std::any getValue() const = 0;
@@ -189,7 +200,7 @@ public:
     virtual const std::vector<std::string> getLabels() const { return {getLabel()}; };
 
     bool isDeferred() const { return deferred; }
-    void defer(bool on) { deferred = on; }
+    void defer(bool on);
     MenuList *getSubMenu() { return submenu; }
 };
 
@@ -255,12 +266,14 @@ public:
 
     const std::any getValue() const override
     {
-        assert(valueIdx >= 0);
+        if (valueIdx < 0 || valueIdx >= (int)values.size())
+            return {};
         return values[valueIdx];
     }
     const std::string getLabel() const override
     {
-        assert(valueIdx >= 0);
+        if (valueIdx < 0 || valueIdx >= (int)labels.size())
+            return "";
         return labels[valueIdx];
     }
     const std::vector<std::any> getValues() const override{ return values; }
@@ -328,6 +341,8 @@ public:
     MenuList(MenuList &) = delete;
 
     static void showOverlay(const std::string& message, OverlayDismissMode dismissMode = OverlayDismissMode::None);
+    static void showOverlayAB(const std::string& message, const std::string& aLabel, const std::string& bLabel);
+    static void showOverlayProgress(const std::string& message, double fraction);
     static void hideOverlay();
     static bool isOverlayVisible();
 
@@ -353,6 +368,8 @@ public:
     void drawMain(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rect &dstTitle);
     void drawMainItem(SDL_Surface *surface, const SDL_Rect &dst, const AbstractMenuItem &item, bool selected);
     virtual void drawCustom(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rect &dstTitle) {};
+    // Called when a parent item defers into this list (keyboard re-entry, etc).
+    virtual void onShow() {}
 };
 
 // Moved here to ensure MenuList is fully defined

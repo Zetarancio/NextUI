@@ -17,12 +17,23 @@ typedef std::shared_lock< Lock >  ReadLock;
 static std::string overlayMessage;
 static bool overlayVisible = false;
 static OverlayDismissMode overlayDismissMode = OverlayDismissMode::None;
+static bool overlayHasBar = false;
+static double overlayBarFrac = 0;
+static std::string overlayBtnA = "OK";
+static std::string overlayBtnB = "BACK";
 static SDL_Surface* overlaySurface = nullptr;
 static Lock overlayLock;
 
 static void drawOverlayLocal(SDL_Surface* screen);
 
 ///////////////////////////////////////////////////////////
+
+void AbstractMenuItem::defer(bool on)
+{
+    deferred = on;
+    if (on && submenu)
+        submenu->onShow();
+}
 
 MenuItem::MenuItem(ListItemType type, const std::string &name, const std::string &desc,
                    const std::vector<std::any> &values, const std::vector<std::string> &labels,
@@ -183,7 +194,8 @@ void MenuItem::initSelection()
             // else
             //    valueIdx = std::distance(values.cbegin(), it);
         }
-        assert(valueIdx >= 0);
+        if (!values.empty())
+            assert(valueIdx >= 0);
     }
 }
 
@@ -199,6 +211,9 @@ InputReactionHint MenuItem::handleInput(int &dirty)
         if (subMenuJustClosed) {
             defer(false);
             dirty = 1;
+            // Cancel returns NoOp (stay on Options). Confirm returns Exit
+            // so the SSID options list closes back to the scan.
+            return hint == Exit ? Exit : NoOp;
         }
         return hint;
     }
@@ -320,26 +335,52 @@ MenuList::~MenuList()
 void MenuList::performLayout(const SDL_Rect &dst)
 {
     ReadLock r(itemLock);
-    // TODO: consecutive calls to this should only update max_visible rows
-    // and try to persist the current selection state
-    // TODO: If we ever need to add menu entries dynamically, this potentially
-    // needs to be called again after.
-    scope.start = 0;
-    scope.selected = 0;
-    scope.count = items.size();
+    int old_selected = scope.selected;
+    int old_start = scope.start;
+    bool keep = layout_called && scope.count > 0;
+
+    scope.count = (int)items.size();
     if (type == MenuItemType::Main)
     {
         scope.max_visible_options = (dst.h - SCALE1(PILL_SIZE)) / SCALE1(PILL_SIZE);
     }
     else
     {
-        // we are leaving some space to show the description label here, account for roughly two lines or one pill
-        // also account for the scroll icon, in case we need it.
-        // scope.max_visible_options = (dst.h - SCALE1(PILL_SIZE * 2)) / SCALE1(BUTTON_SIZE);
-        scope.max_visible_options = (dst.h - SCALE1(PILL_SIZE)) / SCALE1(BUTTON_SIZE);
+        // One pill for the description. *2 left a blank row on my355
+        // (FIXED_SCALE=2) and WiFi only showed 4 SSIDs.
+        scope.max_visible_options = (dst.h - SCALE1(PILL_SIZE)) / SCALE1(PILL_SIZE);
     }
-    scope.end = std::min(scope.count, scope.max_visible_options);
-    scope.visible_rows = scope.end;
+    if (scope.max_visible_options < 1)
+        scope.max_visible_options = 1;
+
+    if (keep && old_selected >= 0 && scope.count > 0)
+    {
+        if (old_selected >= scope.count)
+            old_selected = scope.count - 1;
+        if (old_start < 0)
+            old_start = 0;
+        if (old_start >= scope.count)
+            old_start = 0;
+        scope.selected = old_selected;
+        scope.start = old_start;
+        if (scope.start > scope.selected)
+            scope.start = scope.selected;
+        if (scope.selected >= scope.start + scope.max_visible_options)
+            scope.start = scope.selected - scope.max_visible_options + 1;
+        if (scope.start + scope.max_visible_options > scope.count)
+            scope.start = std::max(0, scope.count - scope.max_visible_options);
+        if (scope.start < 0)
+            scope.start = 0;
+        scope.end = std::min(scope.count, scope.start + scope.max_visible_options);
+        scope.visible_rows = scope.end - scope.start;
+    }
+    else
+    {
+        scope.start = 0;
+        scope.selected = 0;
+        scope.end = std::min(scope.count, scope.max_visible_options);
+        scope.visible_rows = scope.end;
+    }
 
     for (auto itm : items)
         if (itm->getSubMenu())
@@ -386,11 +427,11 @@ bool MenuList::selectPrev()
 
 std::string MenuList::getSelectedItemName() const
 {
-    if(items.empty())
+    if (items.empty())
         return "";
-
-    int selected_row = scope.selected - scope.start;
-    return items.at(selected_row)->getName();
+    if (scope.selected < 0 || scope.selected >= (int)items.size())
+        return "";
+    return items[scope.selected]->getName();
 }
 
 bool MenuList::selectByName(const std::string &name)
@@ -399,20 +440,27 @@ bool MenuList::selectByName(const std::string &name)
         return false;
 
     int toSelect = -1;
-    for (int i = 0; i < items.size() && toSelect < 0; i++)
+    for (int i = 0; i < (int)items.size() && toSelect < 0; i++)
         if(items.at(i)->getName() == name)
             toSelect = i;
-    //LOG_info("Found element %s (%d) at pos %d\n", name.c_str(), scope.selected - scope.start, toSelect);
-    if (toSelect >= 0)
-    {
-        performLayout((SDL_Rect){0, 0, FIXED_WIDTH, FIXED_HEIGHT});
-        while(toSelect > 0) {
-            selectNext();
-            toSelect--;
-        }
-        return true;
-    }
-    return false;
+    if (toSelect < 0)
+        return false;
+
+    scope.count = (int)items.size();
+    scope.selected = toSelect;
+    if (scope.max_visible_options < 1)
+        scope.max_visible_options = scope.count > 0 ? scope.count : 1;
+    if (scope.selected < scope.start)
+        scope.start = scope.selected;
+    if (scope.selected >= scope.start + scope.max_visible_options)
+        scope.start = scope.selected - scope.max_visible_options + 1;
+    if (scope.start < 0)
+        scope.start = 0;
+    if (scope.start + scope.max_visible_options > scope.count)
+        scope.start = std::max(0, scope.count - scope.max_visible_options);
+    scope.end = std::min(scope.count, scope.start + scope.max_visible_options);
+    scope.visible_rows = scope.end - scope.start;
+    return true;
 }
 
 // returns true if the input was handled
@@ -440,8 +488,22 @@ InputReactionHint MenuList::handleInput(int &dirty, int &quit)
         return NoOp;
     }
 
-    ReadLock r(itemLock);
-    InputReactionHint handled = items.at(scope.selected)->handleInput(dirty);
+	ReadLock r(itemLock);
+	if (items.empty() || scope.selected < 0 || scope.selected >= (int)items.size())
+	{
+		if (type == MenuItemType::Custom)
+		{
+			/* KeyboardPrompt has no rows; still consume dpad/A. */
+			if (PAD_justPressed(BTN_B))
+			{
+				quit = 1;
+				return NoOp;
+			}
+			return Unhandled;
+		}
+		return Unhandled;
+	}
+    InputReactionHint handled = items[scope.selected]->handleInput(dirty);
     if(handled == ResetAllItems) {
         resetAllItems();
         dirty = 1;
@@ -497,7 +559,7 @@ SDL_Rect MenuList::itemSizeHint(const AbstractMenuItem &item)
     {
         // calculate the size of the list
         int w = 0;
-        TTF_SizeUTF8(font.small, item.getName().c_str(), &w, NULL);
+        TTF_SizeUTF8(font.large, item.getName().c_str(), &w, NULL);
         w += SCALE1(OPTION_PADDING * 2);
         return {0, 0, w, SCALE1(PILL_SIZE)};
     }
@@ -506,7 +568,7 @@ SDL_Rect MenuList::itemSizeHint(const AbstractMenuItem &item)
         int w = 0;
         int lw = 0;
         int rw = 0;
-        TTF_SizeUTF8(font.small, item.getName().c_str(), &lw, NULL);
+        TTF_SizeUTF8(font.large, item.getName().c_str(), &lw, NULL);
         // get the width of the widest row
         int mrw = 0;
         // every value list in an input table is the same
@@ -544,10 +606,24 @@ SDL_Rect MenuList::itemSizeHint(const AbstractMenuItem &item)
 
 void MenuList::draw(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rect &dstTitle)
 {
-    assert(layout_called);
-    ReadLock r(itemLock);
+    // Updater threads layout against the full 640x480 box. Use the
+    // real list rect so the last row is not drawn on the description.
+    performLayout(dst);
 
-    auto cur = !items.empty() ? items.at(scope.selected) : nullptr;
+    ReadLock r(itemLock);
+    if (items.empty())
+    {
+        if (type == MenuItemType::Custom)
+        {
+            drawCustom(surface, dst, dstTitle);
+            return;
+        }
+        return;
+    }
+    if (scope.selected < 0 || scope.selected >= (int)items.size())
+        return;
+
+    auto cur = items[scope.selected];
     if (cur && cur->isDeferred())
     {
         assert(cur->getSubMenu());
@@ -635,8 +711,8 @@ void MenuList::drawList(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rec
     int selected_row = scope.selected - scope.start;
     for (int i = scope.start, j = 0; i < scope.end; i++, j++)
     {
-        auto pos = dy(rect, SCALE1(j * BUTTON_SIZE));
-        pos.h = SCALE1(BUTTON_SIZE);
+        auto pos = dy(rect, SCALE1(j * PILL_SIZE));
+        pos.h = SCALE1(PILL_SIZE);
         drawListItem(surface, pos, *items[i], j == selected_row);
     }
 }
@@ -651,13 +727,13 @@ void MenuList::drawListItem(SDL_Surface *surface, const SDL_Rect &dst, const Abs
     {
         // move out of conditional if centering
         int w = 0;
-        TTF_SizeUTF8(font.small, item.getName().c_str(), &w, NULL);
+        TTF_SizeUTF8(font.large, item.getName().c_str(), &w, NULL);
         w += SCALE1(OPTION_PADDING * 2);
 
-        GFX_blitPillDarkCPP(ASSET_BUTTON, surface, {dst.x, dst.y, w, SCALE1(BUTTON_SIZE)});
+        GFX_blitPillDarkCPP(ASSET_BUTTON, surface, nativeButtonRect(dst.x, dst.y, w, dst.h));
         text_color = uintToColour(THEME_COLOR5_255);
     }
-    text = TTF_RenderUTF8_Blended(font.small, item.getName().c_str(), text_color);
+    text = TTF_RenderUTF8_Blended(font.large, item.getName().c_str(), text_color);
     SDL_BlitSurfaceCPP(text, {}, surface, {dst.x + SCALE1(OPTION_PADDING), dst.y  + ((dst.h - text->h) / 2)});
     SDL_FreeSurface(text);
 }
@@ -675,8 +751,8 @@ void MenuList::drawFixed(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Re
     int selected_row = scope.selected - scope.start;
     for (int i = scope.start, j = 0; i < scope.end; i++, j++)
     {
-        auto pos = dy(rect, SCALE1(j * BUTTON_SIZE));
-        pos.h = SCALE1(BUTTON_SIZE);
+        auto pos = dy(rect, SCALE1(j * PILL_SIZE));
+        pos.h = SCALE1(PILL_SIZE);
         drawFixedItem(surface, pos, *items[i], j == selected_row);
     }
 }
@@ -702,6 +778,12 @@ namespace
 
 void MenuList::drawFixedItem(SDL_Surface *surface, const SDL_Rect &dst, const AbstractMenuItem &item, bool selected)
 {
+    if (item.getType() == ListItemType::Custom)
+    {
+        item.drawCustomItem(surface, dst, item, selected);
+        return;
+    }
+
     SDL_Color text_color = uintToColour(THEME_COLOR4_255);
     SDL_Color text_color_value = uintToColour(THEME_COLOR4_255);
     SDL_Surface *text;
@@ -712,7 +794,7 @@ void MenuList::drawFixedItem(SDL_Surface *surface, const SDL_Rect &dst, const Ab
     if (selected)
     {
         // gray pill
-        GFX_blitPillLightCPP(ASSET_BUTTON, surface, {dst.x, dst.y, mw, SCALE1(BUTTON_SIZE)});
+        GFX_blitPillLightCPP(ASSET_BUTTON, surface, nativeButtonRect(dst.x, dst.y, mw, dst.h));
     }
 
     if (item.getValue().has_value())
@@ -730,7 +812,7 @@ void MenuList::drawFixedItem(SDL_Surface *surface, const SDL_Rect &dst, const Ab
             uint32_t color = mapUint(surface, rawColor);
             SDL_Rect rect = {
                 dst.x + dst.w - SCALE1(OPTION_PADDING + FONT_TINY),
-                dst.y + SCALE1(BUTTON_SIZE - FONT_TINY) / 2,
+                dst.y + SCALE1(PILL_SIZE - FONT_TINY) / 2,
                 SCALE1(FONT_TINY), SCALE1(FONT_TINY)};
             SDL_FillRect(surface, &rect, RGB_WHITE);
             rect = dy(dx(rect, 1), 1);
@@ -748,9 +830,6 @@ void MenuList::drawFixedItem(SDL_Surface *surface, const SDL_Rect &dst, const Ab
         else if(item.getType() == ListItemType::Button) {
             // dont draw anything for now, could be a button hint later
         }
-        else if(item.getType() == ListItemType::Custom) {
-            item.drawCustomItem(surface, dst, item, selected);
-        }
         else // Generic and fallback
             SDL_BlitSurfaceCPP(text, {}, surface, {dst.x + mw - text->w - SCALE1(OPTION_PADDING), dst.y + ((dst.h - text->h) / 2)});
         SDL_FreeSurface(text);
@@ -761,13 +840,13 @@ void MenuList::drawFixedItem(SDL_Surface *surface, const SDL_Rect &dst, const Ab
     {
         // white pill
         int w = 0;
-        TTF_SizeUTF8(font.small, item.getName().c_str(), &w, NULL);
+        TTF_SizeUTF8(font.large, item.getName().c_str(), &w, NULL);
         w += SCALE1(OPTION_PADDING * 2);
-        GFX_blitPillDarkCPP(ASSET_BUTTON, surface, {dst.x, dst.y, w, SCALE1(BUTTON_SIZE)});
+        GFX_blitPillDarkCPP(ASSET_BUTTON, surface, nativeButtonRect(dst.x, dst.y, w, dst.h));
         text_color = uintToColour(THEME_COLOR5_255);
     }
 
-    text = TTF_RenderUTF8_Blended(font.small, item.getName().c_str(), text_color);
+    text = TTF_RenderUTF8_Blended(font.large, item.getName().c_str(), text_color);
     SDL_BlitSurfaceCPP(text, {}, surface, {dst.x + SCALE1(OPTION_PADDING), dst.y + ((dst.h - text->h) / 2)});
     SDL_FreeSurface(text);
 }
@@ -795,8 +874,8 @@ void MenuList::drawInput(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Re
     int selected_row = scope.selected - scope.start;
     for (int i = scope.start, j = 0; i < scope.end; i++, j++)
     {
-        auto pos = dy(rect, SCALE1(j * BUTTON_SIZE));
-        pos.h = SCALE1(BUTTON_SIZE);
+        auto pos = dy(rect, SCALE1(j * PILL_SIZE));
+        pos.h = SCALE1(PILL_SIZE);
         pos.w = max_width;
         drawInputItem(surface, pos, *items[i], j == selected_row);
     }
@@ -813,16 +892,16 @@ void MenuList::drawInputItem(SDL_Surface *surface, const SDL_Rect &dst, const Ab
     if (selected)
     {
         // gray pill
-        GFX_blitPillLightCPP(ASSET_BUTTON, surface, {dst.x, dst.y, mw, SCALE1(BUTTON_SIZE)});
+        GFX_blitPillLightCPP(ASSET_BUTTON, surface, nativeButtonRect(dst.x, dst.y, mw, dst.h));
 
         // white pill
         int w = 0;
-        TTF_SizeUTF8(font.small, item.getName().c_str(), &w, NULL);
+        TTF_SizeUTF8(font.large, item.getName().c_str(), &w, NULL);
         w += SCALE1(OPTION_PADDING * 2);
-        GFX_blitPillDarkCPP(ASSET_BUTTON, surface, {dst.x, dst.y, w, SCALE1(BUTTON_SIZE)});
+        GFX_blitPillDarkCPP(ASSET_BUTTON, surface, nativeButtonRect(dst.x, dst.y, w, dst.h));
         text_color = COLOR_BLACK;
     }
-    text = TTF_RenderUTF8_Blended(font.small, item.getName().c_str(), text_color);
+    text = TTF_RenderUTF8_Blended(font.large, item.getName().c_str(), text_color);
     SDL_BlitSurfaceCPP(text, {}, surface, {dst.x + SCALE1(OPTION_PADDING), dst.y + ((dst.h - text->h) / 2)});
     SDL_FreeSurface(text);
 
@@ -901,16 +980,8 @@ void MenuList::resetAllItems()
     }
 }
 
-void MenuList::showOverlay(const std::string& message, OverlayDismissMode dismissMode)
+static void flipOverlayNow()
 {
-    {
-        WriteLock w(overlayLock);
-        overlayMessage = message;
-        overlayVisible = true;
-        overlayDismissMode = dismissMode;
-    }
-    
-    // We want to force a draw right now since usually we are about to block
     WriteLock w(overlayLock);
     if (overlaySurface) {
         // Clear the surface first to prevent text ghosting from previous
@@ -922,10 +993,58 @@ void MenuList::showOverlay(const std::string& message, OverlayDismissMode dismis
     }
 }
 
+void MenuList::showOverlay(const std::string& message, OverlayDismissMode dismissMode)
+{
+    {
+        WriteLock w(overlayLock);
+        overlayMessage = message;
+        overlayVisible = true;
+        overlayDismissMode = dismissMode;
+        overlayHasBar = false;
+        overlayBarFrac = 0;
+        overlayBtnA = "OK";
+        overlayBtnB = "BACK";
+    }
+    flipOverlayNow();
+}
+
+void MenuList::showOverlayAB(const std::string& message, const std::string& aLabel, const std::string& bLabel)
+{
+    {
+        WriteLock w(overlayLock);
+        overlayMessage = message;
+        overlayVisible = true;
+        overlayDismissMode = OverlayDismissMode::ConfirmAB;
+        overlayHasBar = false;
+        overlayBarFrac = 0;
+        overlayBtnA = aLabel.empty() ? "OK" : aLabel;
+        overlayBtnB = bLabel.empty() ? "BACK" : bLabel;
+    }
+    flipOverlayNow();
+}
+
+void MenuList::showOverlayProgress(const std::string& message, double fraction)
+{
+    if (fraction < 0)
+        fraction = 0;
+    if (fraction > 1)
+        fraction = 1;
+    {
+        WriteLock w(overlayLock);
+        overlayMessage = message;
+        overlayVisible = true;
+        overlayDismissMode = OverlayDismissMode::None;
+        overlayHasBar = true;
+        overlayBarFrac = fraction;
+    }
+    flipOverlayNow();
+}
+
 void MenuList::hideOverlay()
 {
     WriteLock w(overlayLock);
     overlayVisible = false;
+    overlayHasBar = false;
 }
 
 bool MenuList::isOverlayVisible()
@@ -953,17 +1072,47 @@ static void drawOverlayLocal(SDL_Surface* screen) {
     }
     SDL_BlitSurface(shadow, NULL, screen, NULL);
 
-    SDL_Rect screenRect = {0, 0, screen->w, screen->h};
+    int hint_h = 0;
+    if (overlayHasBar || overlayDismissMode != OverlayDismissMode::None)
+        hint_h = SCALE1(PADDING + PILL_SIZE + PADDING);
 
-    GFX_blitMessageCPP(font.medium, overlayMessage, screen, screenRect);
-    
-    if (overlayDismissMode != OverlayDismissMode::None) {
-        if (overlayDismissMode == OverlayDismissMode::DismissOnB) {
-            char *hints[] = {(char *)("B"), (char *)("BACK"), NULL};
-            GFX_blitButtonGroup(hints, 1, screen, 1);
-        } else if (overlayDismissMode == OverlayDismissMode::DismissOnA) {
-            char *hints[] = {(char *)("A"), (char *)("OK"), NULL};
-            GFX_blitButtonGroup(hints, 1, screen, 1);
+    int bar_h = overlayHasBar ? SCALE1(10 + 16) : 0;
+    SDL_Rect msgRect = {0, 0, screen->w, screen->h - hint_h - bar_h};
+    if (msgRect.h < SCALE1(PILL_SIZE))
+        msgRect.h = SCALE1(PILL_SIZE);
+
+    GFX_blitMessageCPP(font.medium, overlayMessage, screen, msgRect);
+
+    if (overlayHasBar) {
+        int margin = SCALE1(40);
+        int bw = screen->w - margin * 2;
+        if (bw < SCALE1(80))
+            bw = SCALE1(80);
+        int bh = SCALE1(10);
+        int bx = (screen->w - bw) / 2;
+        int by = screen->h - hint_h - bh - SCALE1(8);
+        SDL_Rect track = {bx, by, bw, bh};
+        SDL_FillRect(screen, &track, SDL_MapRGB(screen->format, 48, 48, 48));
+        int fw = (int)(bw * overlayBarFrac);
+        if (fw > 0) {
+            if (fw > bw)
+                fw = bw;
+            SDL_Rect fill = {bx, by, fw, bh};
+            SDL_FillRect(screen, &fill, THEME_COLOR1);
         }
+        char *hints[] = {(char *)("B"), (char *)("CANCEL"), NULL};
+        GFX_blitButtonGroup(hints, 1, screen, 1);
+    } else if (overlayDismissMode == OverlayDismissMode::ConfirmAB) {
+        char *hints[] = {
+            (char *)("B"), (char *)overlayBtnB.c_str(),
+            (char *)("A"), (char *)overlayBtnA.c_str(),
+            NULL};
+        GFX_blitButtonGroup(hints, 1, screen, 1);
+    } else if (overlayDismissMode == OverlayDismissMode::DismissOnB) {
+        char *hints[] = {(char *)("B"), (char *)("BACK"), NULL};
+        GFX_blitButtonGroup(hints, 1, screen, 1);
+    } else if (overlayDismissMode == OverlayDismissMode::DismissOnA) {
+        char *hints[] = {(char *)("A"), (char *)("OK"), NULL};
+        GFX_blitButtonGroup(hints, 1, screen, 1);
     }
 }

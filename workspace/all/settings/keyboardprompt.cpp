@@ -45,6 +45,16 @@ KeyboardPrompt::KeyboardPrompt(const std::string &title, MenuListCallback on_con
 
 KeyboardPrompt::~KeyboardPrompt() {}
 
+void KeyboardPrompt::onShow()
+{
+    state.quitting = false;
+    state.exit_code = ExitCode::Uninitialized;
+    state.keyboard.display = true;
+    state.keyboard.current_text = state.keyboard.initial_text;
+    state.keyboard.final_text.clear();
+    state.redraw = true;
+}
+
 void KeyboardPrompt::drawCustom(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rect &dstTitle)
 {
     drawKeyboard(surface, state);
@@ -55,43 +65,46 @@ void KeyboardPrompt::drawCustom(SDL_Surface *surface, const SDL_Rect &dst, const
 
 InputReactionHint KeyboardPrompt::handleInput(int &dirty, int &quit)
 {
-    if (PAD_justPressed(BTN_Y))
-    {
+    auto cancel = [&]() -> InputReactionHint {
         state.keyboard.final_text = state.keyboard.initial_text;
         state.quitting = true;
         state.exit_code = ExitCode::CancelButton;
         state.redraw = true;
-        // why is this branch not exiting?
-    }
+        dirty = 1;
+        quit = 1;
+        return InputReactionHint::NoOp;
+    };
 
-    if (PAD_justPressed(BTN_MENU))
-    {
-        state.keyboard.final_text = state.keyboard.initial_text;
-        state.redraw = false;
-        state.quitting = true;
-        state.exit_code = ExitCode::MenuButton;
-
-        // todo: update quit and dirty flags
-        return InputReactionHint::Exit;
-    }
+    // EmulationStation OSK: B is Back (closes, does not save). NextUI used
+    // B as backspace, so backing out of a WiFi password left the keyboard
+    // open and froze scan.
+    if (PAD_justPressed(BTN_B) || PAD_justPressed(BTN_Y) || PAD_justPressed(BTN_MENU))
+        return cancel();
 
     handleKeyboardInput(state);
     dirty |= state.redraw;
-    quit |= state.quitting;
 
     if (state.exit_code == ExitCode::CancelButton) {
-        return InputReactionHint::Exit;
-    }
-    else if (state.exit_code == ExitCode::Success) {
-        if(on_confirm) {
-            MenuItem tmp{ListItemType::Button, state.keyboard.final_text, ""};
-            return on_confirm(tmp);
-        }
-        return InputReactionHint::Exit;
-    }
-    else {
+        quit = 1;
         return InputReactionHint::NoOp;
     }
+    if (state.exit_code == ExitCode::Success) {
+        if (on_confirm) {
+            MenuItem tmp{ListItemType::Button, state.keyboard.final_text, ""};
+            auto hint = on_confirm(tmp);
+            // Rejected input (short WiFi password): keep the keyboard open.
+            if (hint != Exit) {
+                state.quitting = false;
+                state.exit_code = ExitCode::Uninitialized;
+                return hint;
+            }
+        }
+        quit = 1;
+        return InputReactionHint::Exit;
+    }
+
+    quit |= state.quitting;
+    return InputReactionHint::NoOp;
 }
 
 void KeyboardPrompt::handleKeyboardInput(AppState &state)
@@ -177,18 +190,20 @@ void KeyboardPrompt::handleKeyboardInput(AppState &state)
         else if (state.keyboard.col < max_col - 1)
             state.keyboard.col++;
     }
-    else if (PAD_justPressed(BTN_X))
-    {
-        state.keyboard.final_text = state.keyboard.current_text;
-        state.keyboard.display = !state.keyboard.display;
-        state.redraw = true;
-        state.quitting = true;
-        state.exit_code = ExitCode::Success;
-    }
-    else if (PAD_justPressed(BTN_B))
+    else if (PAD_justPressed(BTN_L1))
     {
         if (!state.keyboard.current_text.empty())
             state.keyboard.current_text.pop_back();
+        state.redraw = true;
+    }
+    else if (PAD_justPressed(BTN_X))
+    {
+        // Hint shows X = ENTER. Stock NextUI used X to submit.
+        // L1 is backspace (EmulationStation).
+        state.keyboard.final_text = state.keyboard.current_text;
+        state.keyboard.display = !state.keyboard.display;
+        state.quitting = true;
+        state.exit_code = ExitCode::Success;
     }
     else if (PAD_justPressed(BTN_A))
     {
@@ -315,7 +330,7 @@ void KeyboardPrompt::drawKeyboard(SDL_Surface *screen, const AppState &state)
     const auto key = currentLayout->at(state.keyboard.row).at(state.keyboard.col);
 
     // draw the button group on the button-right
-    char *hints[] = {(char *)("Y"), (char *)("EXIT"), (char *)("X"), ((char *)"ENTER"), NULL};
+    char *hints[] = {(char *)("B"), (char *)("BACK"), (char *)("X"), (char *)("ENTER"), NULL};
     GFX_blitButtonGroup(hints, 1, screen, 1);
 
     // draw keyboard title
