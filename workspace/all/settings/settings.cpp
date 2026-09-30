@@ -374,9 +374,21 @@ int main(int argc, char *argv[])
         ZlymeJoystick_setScreen(ctx.screen);
         PAD_init();
         PWR_init();
+        /* zone.tab stays off the frontend first frame. Settings owns the list. */
+        TIME_init();
 
         signal(SIGINT, sigHandler);
         signal(SIGTERM, sigHandler);
+
+        char timezones[MAX_TIMEZONES][MAX_TZ_LENGTH];
+        int tz_count = 0;
+        TIME_getTimezones(timezones, &tz_count);
+        std::vector<std::any> tz_values;
+        std::vector<std::string> tz_labels;
+        for (int i = 0; i < tz_count; ++i) {
+            tz_values.push_back(std::string(timezones[i]));
+            tz_labels.push_back(std::string(timezones[i]));
+        }
 
         int was_online = PWR_isOnline();
         int had_bt = PLAT_btIsConnected();
@@ -613,6 +625,25 @@ int main(int argc, char *argv[])
             [](const std::any &value){ CFG_setDefaultView(std::any_cast<int>(value)); },
             []() { CFG_setDefaultView(CFG_DEFAULT_VIEW);}},
         });
+
+        if (tz_count > 0) {
+            const bool zlyme_clock = deviceInfo.getPlatform() == DeviceInfo::my355;
+            systemItems.push_back(
+                new MenuItem{ListItemType::Generic, "Time zone", "Your time zone",
+                tz_values, tz_labels,
+                []() -> std::any {
+                    char *tz = TIME_getCurrentTimezone();
+                    std::string s = tz ? tz : "UTC";
+                    free(tz);
+                    return s;
+                },
+                [](const std::any &value) {
+                    TIME_setCurrentTimezone(std::any_cast<std::string>(value).c_str());
+                },
+                [zlyme_clock]() {
+                    TIME_setCurrentTimezone(zlyme_clock ? "UTC" : "Asia/Shanghai");
+                }});
+        }
 
         if(deviceInfo.getPlatform() == DeviceInfo::tg5040)
         {

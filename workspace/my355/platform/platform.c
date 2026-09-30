@@ -925,7 +925,23 @@ void PLAT_initTimezones() {
     }
     
     fclose(file);
-    
+
+    /* UTC is the fallback and is not a zone.tab row. */
+    {
+        int have_utc = 0;
+        for (int i = 0; i < cached_tz_count; i++) {
+            if (strcmp(cached_timezones[i], "UTC") == 0) {
+                have_utc = 1;
+                break;
+            }
+        }
+        if (!have_utc && cached_tz_count < MAX_TIMEZONES) {
+            strncpy(cached_timezones[cached_tz_count], "UTC", MAX_TZ_LENGTH - 1);
+            cached_timezones[cached_tz_count][MAX_TZ_LENGTH - 1] = '\0';
+            cached_tz_count++;
+        }
+    }
+
     // Sort the list alphabetically
     qsort(cached_timezones, cached_tz_count, MAX_TZ_LENGTH, compare_timezones);
 }
@@ -941,21 +957,102 @@ void PLAT_getTimezones(char timezones[MAX_TIMEZONES][MAX_TZ_LENGTH], int *tz_cou
     *tz_count = cached_tz_count;
 }
 
-char *PLAT_getCurrentTimezone() {
-	// easy enough, get current index from config and return the string
-	int tz_index = CFG_getCurrentTimezone();
-	if (tz_index < 0 || cached_tz_count <= 0 || tz_index >= cached_tz_count) {
-		LOG_warn("Error: Current timezone index %d out of bounds.\n", tz_index);
-		return strdup("UTC");
-	}
+static int file_same(const char *a, const char *b)
+{
+	FILE *fa = fopen(a, "rb");
+	FILE *fb = fopen(b, "rb");
+	char ba[512], bb[512];
+	int same = 0;
 
+	if (!fa || !fb)
+		goto out;
+	for (;;) {
+		size_t na = fread(ba, 1, sizeof ba, fa);
+		size_t nb = fread(bb, 1, sizeof bb, fb);
+		if (na != nb || memcmp(ba, bb, na) != 0)
+			goto out;
+		if (na == 0) {
+			same = 1;
+			goto out;
+		}
+	}
+out:
+	if (fa)
+		fclose(fa);
+	if (fb)
+		fclose(fb);
+	return same;
+}
+
+static int saved_zone_name(char *out, size_t outlen)
+{
+	FILE *f = fopen(CUR_ZONE_PATH ".zone", "r");
+	char *nl;
+
+	if (!f)
+		return 0;
+	if (!fgets(out, outlen, f)) {
+		fclose(f);
+		return 0;
+	}
+	fclose(f);
+	nl = strchr(out, '\n');
+	if (nl)
+		*nl = '\0';
+	return out[0] != '\0';
+}
+
+static int zone_cached(const char *name)
+{
+	for (int i = 0; i < cached_tz_count; i++) {
+		if (strcmp(cached_timezones[i], name) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+/* A TZif that is not the UTC seed is an older explicit choice. */
+static int localtime_is_user_zone(void)
+{
+	struct stat st;
+
+	if (stat(CUR_ZONE_PATH, &st) != 0 || !S_ISREG(st.st_mode))
+		return 0;
+	if (access(ZONE_PATH "/UTC", R_OK) != 0 && access(ZONE_PATH "/Etc/UTC", R_OK) != 0)
+		return 0;
+	if (file_same(CUR_ZONE_PATH, ZONE_PATH "/UTC"))
+		return 0;
+	if (file_same(CUR_ZONE_PATH, ZONE_PATH "/Etc/UTC"))
+		return 0;
+	return 1;
+}
+
+char *PLAT_getCurrentTimezone() {
+	char name[MAX_TZ_LENGTH];
 	char *output = (char *)malloc(256);
+
 	if (!output)
 		return NULL;
+	if (cached_tz_count == -1)
+		PLAT_initTimezones();
 
-	strncpy(output, cached_timezones[tz_index], 256 - 1);
-	output[256 - 1] = '\0'; // Ensure null-termination
+	if (cached_tz_count > 0 && saved_zone_name(name, sizeof name) && zone_cached(name)) {
+		strncpy(output, name, 255);
+		output[255] = '\0';
+		return output;
+	}
 
+	if (cached_tz_count > 0 && localtime_is_user_zone()) {
+		int tz_index = CFG_getCurrentTimezone();
+		if (tz_index >= 0 && tz_index < cached_tz_count) {
+			strncpy(output, cached_timezones[tz_index], 255);
+			output[255] = '\0';
+			return output;
+		}
+	}
+
+	strncpy(output, "UTC", 255);
+	output[255] = '\0';
 	return output;
 }
 
@@ -999,7 +1096,13 @@ void PLAT_setCurrentTimezone(const char* tz) {
 		if (safe) {
 			char cmd[512];
 			snprintf(cmd, sizeof(cmd), "zlyme-timezone apply %s", tz);
-			system(cmd);
+			if (system(cmd) == 0) {
+				/* glibc caches the zone path, not the file mtime. */
+				setenv("TZ", CUR_ZONE_PATH, 1);
+				tzset();
+				unsetenv("TZ");
+				tzset();
+			}
 		}
 	}
 
