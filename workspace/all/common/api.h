@@ -757,6 +757,8 @@ char* PLAT_getModel(void);
 void PLAT_getOsVersionInfo(char *output_str, size_t max_len);
 void PLAT_getNetworkStatus(int* is_online);
 bool PLAT_btIsConnected(void);
+/* Hardware color-temperature control. my355 does not have one. */
+bool PLAT_supportsColorTemperature(void);
 typedef enum {
 	SIGNAL_STRENGTH_OFF = -1,
 	SIGNAL_STRENGTH_DISCONNECTED,

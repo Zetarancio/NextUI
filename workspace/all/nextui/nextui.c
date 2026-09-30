@@ -944,14 +944,14 @@ static Array* getQuickEntries(void) {
 static Array* getQuickToggles(void) {
 	Array *entries = Array_new();
 
+	Entry *settings = entryFromPakName("Settings");
+	if (settings)
+		Array_push(entries, settings);
+
 	if(WIFI_supported())
 		Array_push(entries, Entry_new("Wifi", ENTRY_DIP));
 	if(BT_supported())
 		Array_push(entries, Entry_new("Bluetooth", ENTRY_DIP));
-
-	Entry *settings = entryFromPakName("Settings");
-	if (settings)
-		Array_push(entries, settings);
 
 	Entry *store = entryFromPakName("Pak Store");
 	if (store)

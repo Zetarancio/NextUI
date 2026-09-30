@@ -2424,11 +2424,12 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 }
 void GFX_blitHardwareHints(SDL_Surface *dst, int show_setting)
 {
-
-	if (show_setting == 1)
+	if (show_setting == 1 || (show_setting == 3 && !PLAT_supportsColorTemperature()))
 		GFX_blitButtonGroup((char *[]){BRIGHTNESS_BUTTON_LABEL, "BRIGHTNESS", NULL}, 0, dst, 0);
 	else if (show_setting == 3)
 		GFX_blitButtonGroup((char *[]){BRIGHTNESS_BUTTON_LABEL, "COLOR TEMP", NULL}, 0, dst, 0);
+	else if (!PLAT_supportsColorTemperature())
+		GFX_blitButtonGroup((char *[]){"MNU", "BRGHT", NULL}, 0, dst, 0);
 	else
 		GFX_blitButtonGroup((char *[]){"MNU", "BRGHT", "SEL", "CLTMP", NULL}, 0, dst, 0);
 }
@@ -4238,7 +4239,8 @@ void PWR_update(int *_dirty, int *_show_setting, PWR_callback_t before_sleep, PW
 		dirty = 1;
 	}
 
-	if (!show_setting && !PAD_isPressed(BTN_MOD_VOLUME) && !PAD_isPressed(BTN_MOD_BRIGHTNESS) && !PAD_isPressed(BTN_MOD_COLORTEMP))
+	if (!show_setting && !PAD_isPressed(BTN_MOD_VOLUME) && !PAD_isPressed(BTN_MOD_BRIGHTNESS) &&
+		!(PLAT_supportsColorTemperature() && PAD_isPressed(BTN_MOD_COLORTEMP)))
 	{
 		mod_unpressed_at = now; // this feels backwards but is correct
 	}
@@ -4246,7 +4248,8 @@ void PWR_update(int *_dirty, int *_show_setting, PWR_callback_t before_sleep, PW
 #define MOD_DELAY 250
 	if (
 		(
-			(PAD_isPressed(BTN_MOD_VOLUME) || PAD_isPressed(BTN_MOD_BRIGHTNESS) || PAD_isPressed(BTN_MOD_COLORTEMP)) &&
+			(PAD_isPressed(BTN_MOD_VOLUME) || PAD_isPressed(BTN_MOD_BRIGHTNESS) ||
+			 (PLAT_supportsColorTemperature() && PAD_isPressed(BTN_MOD_COLORTEMP))) &&
 			(!delay_settings || now - mod_unpressed_at >= MOD_DELAY)) ||
 		((!BTN_MOD_VOLUME || !BTN_MOD_BRIGHTNESS || !BTN_MOD_COLORTEMP) && (PAD_justRepeated(BTN_MOD_PLUS) || PAD_justRepeated(BTN_MOD_MINUS))))
 	{
@@ -4255,7 +4258,7 @@ void PWR_update(int *_dirty, int *_show_setting, PWR_callback_t before_sleep, PW
 		{
 			show_setting = 1;
 		}
-		else if (PAD_isPressed(BTN_MOD_COLORTEMP))
+		else if (PLAT_supportsColorTemperature() && PAD_isPressed(BTN_MOD_COLORTEMP))
 		{
 			show_setting = 3;
 		}
@@ -4953,6 +4956,7 @@ FALLBACK_IMPLEMENTATION void PLAT_bluetoothConnect(char *addr) {}
 FALLBACK_IMPLEMENTATION void PLAT_bluetoothDisconnect(char *addr) {}
 FALLBACK_IMPLEMENTATION bool PLAT_bluetoothConnected() { return false; }
 FALLBACK_IMPLEMENTATION bool PLAT_btIsConnected(void) { return PLAT_bluetoothConnected(); }
+FALLBACK_IMPLEMENTATION bool PLAT_supportsColorTemperature(void) { return true; }
 FALLBACK_IMPLEMENTATION void PLAT_bluetoothStreamInit(int ch, int samplerate) {}
 FALLBACK_IMPLEMENTATION void PLAT_bluetoothStreamBegin(int buffersize) {}
 FALLBACK_IMPLEMENTATION void PLAT_bluetoothStreamEnd() {}

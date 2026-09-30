@@ -329,8 +329,9 @@ void KeyboardPrompt::drawKeyboard(SDL_Surface *screen, const AppState &state)
         currentLayout = &keyboardLayoutSpecial;
     const auto key = currentLayout->at(state.keyboard.row).at(state.keyboard.col);
 
-    // draw the button group on the button-right
+    char *delete_hint[] = {(char *)("L1"), (char *)("DELETE"), NULL};
     char *hints[] = {(char *)("B"), (char *)("BACK"), (char *)("X"), (char *)("ENTER"), NULL};
+    GFX_blitButtonGroup(delete_hint, 0, screen, 0);
     GFX_blitButtonGroup(hints, 1, screen, 1);
 
     // draw keyboard title
