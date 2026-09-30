@@ -571,6 +571,7 @@ void PWR_powerOff(int reboot);
 int PWR_isPoweringOff(void);
 
 void PWR_sleep(void);
+void PWR_sleepNow(void);
 int PWR_deepSleep(void);
 
 void PWR_disableSleep(void);
@@ -657,6 +658,7 @@ void PLAT_pollInput(void);
 int PLAT_shouldWake(void);
 
 SDL_Surface* PLAT_initVideo(void);
+void PLAT_blankFb0(void);
 void PLAT_quitVideo(void);
 void PLAT_clearVideo(SDL_Surface* screen);
 void PLAT_clearAll(void);

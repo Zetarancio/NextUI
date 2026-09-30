@@ -15,6 +15,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <signal.h>
 
 #include "utils.h"
 #include "config.h"
@@ -356,6 +358,8 @@ SDL_Surface *GFX_init(int mode)
 	PLAT_initPlatform();
 
 	gfx.screen = PLAT_initVideo();
+	if (!gfx.screen)
+		return NULL;
 	gfx.vsync = VSYNC_STRICT;
 	gfx.mode = mode;
 
@@ -369,10 +373,8 @@ SDL_Surface *GFX_init(int mode)
 	if(mode == MODE_MAIN)
 		GFX_setClearColor(mapUint(CFG_getColor(COLOR_BACKGROUND)));
 
-	// We always have to symlink, does not depend on NTP being enabled
-	PLAT_initTimezones();
-	PLAT_setCurrentTimezone(PLAT_getCurrentTimezone());
-
+	// zone.tab parse + hwclock blocked first frame. Settings still
+	// TIME_init() when opening the timezone row.
 	PLAT_initLid();
 	LEDS_initLeds();
 
@@ -3299,6 +3301,22 @@ void PAD_reset(void)
 	pad.just_released = BTN_NONE;
 	pad.just_repeated = BTN_NONE;
 }
+__attribute__((weak)) int PLAT_suppressRawJoy(SDL_JoystickID id)
+{
+	(void)id;
+	return 0;
+}
+__attribute__((weak)) int PLAT_rawButtonIsGuide(SDL_JoystickID id, Uint8 button)
+{
+	(void)id;
+	(void)button;
+	return 0;
+}
+__attribute__((weak)) int PLAT_ignoreControllerGuide(void)
+{
+	return 0;
+}
+
 FALLBACK_IMPLEMENTATION void PLAT_pollInput(void)
 {
 	// reset transient state
@@ -3450,12 +3468,79 @@ FALLBACK_IMPLEMENTATION void PLAT_pollInput(void)
 				id = BTN_ID_POWEROFF;
 			} // nano-only
 		}
+		else if (event.type == SDL_CONTROLLERBUTTONDOWN || event.type == SDL_CONTROLLERBUTTONUP)
+		{
+			pressed = event.type == SDL_CONTROLLERBUTTONDOWN;
+			switch (event.cbutton.button) {
+			case SDL_CONTROLLER_BUTTON_A: btn = BTN_A; id = BTN_ID_A; break;
+			case SDL_CONTROLLER_BUTTON_B: btn = BTN_B; id = BTN_ID_B; break;
+			case SDL_CONTROLLER_BUTTON_X: btn = BTN_X; id = BTN_ID_X; break;
+			case SDL_CONTROLLER_BUTTON_Y: btn = BTN_Y; id = BTN_ID_Y; break;
+			case SDL_CONTROLLER_BUTTON_DPAD_UP: btn = BTN_DPAD_UP; id = BTN_ID_DPAD_UP; break;
+			case SDL_CONTROLLER_BUTTON_DPAD_DOWN: btn = BTN_DPAD_DOWN; id = BTN_ID_DPAD_DOWN; break;
+			case SDL_CONTROLLER_BUTTON_DPAD_LEFT: btn = BTN_DPAD_LEFT; id = BTN_ID_DPAD_LEFT; break;
+			case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: btn = BTN_DPAD_RIGHT; id = BTN_ID_DPAD_RIGHT; break;
+			case SDL_CONTROLLER_BUTTON_START: btn = BTN_START; id = BTN_ID_START; break;
+			case SDL_CONTROLLER_BUTTON_BACK: btn = BTN_SELECT; id = BTN_ID_SELECT; break;
+			case SDL_CONTROLLER_BUTTON_GUIDE:
+				if (!PLAT_ignoreControllerGuide()) {
+					btn = BTN_MENU;
+					id = BTN_ID_MENU;
+				}
+				break;
+			case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: btn = BTN_L1; id = BTN_ID_L1; break;
+			case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: btn = BTN_R1; id = BTN_ID_R1; break;
+			case SDL_CONTROLLER_BUTTON_LEFTSTICK: btn = BTN_L3; id = BTN_ID_L3; break;
+			case SDL_CONTROLLER_BUTTON_RIGHTSTICK: btn = BTN_R3; id = BTN_ID_R3; break;
+			default: break;
+			}
+		}
+		else if (event.type == SDL_CONTROLLERAXISMOTION)
+		{
+			int axis = event.caxis.axis;
+			int val = event.caxis.value;
+			if (axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) {
+				btn = BTN_L2;
+				id = BTN_ID_L2;
+				pressed = val > 16000;
+			}
+			else if (axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) {
+				btn = BTN_R2;
+				id = BTN_ID_R2;
+				pressed = val > 16000;
+			}
+			else if (axis == SDL_CONTROLLER_AXIS_LEFTX) {
+				pad.laxis.x = val;
+				PAD_setAnalog(BTN_ID_ANALOG_LEFT, BTN_ID_ANALOG_RIGHT, val, tick + PAD_REPEAT_DELAY);
+			}
+			else if (axis == SDL_CONTROLLER_AXIS_LEFTY) {
+				pad.laxis.y = val;
+				PAD_setAnalog(BTN_ID_ANALOG_UP, BTN_ID_ANALOG_DOWN, val, tick + PAD_REPEAT_DELAY);
+			}
+			else if (axis == SDL_CONTROLLER_AXIS_RIGHTX)
+				pad.raxis.x = val;
+			else if (axis == SDL_CONTROLLER_AXIS_RIGHTY)
+				pad.raxis.y = val;
+			if (!pressed && btn != BTN_NONE && !(pad.is_pressed & btn))
+				btn = BTN_NONE;
+		}
 		else if (event.type == SDL_JOYBUTTONDOWN || event.type == SDL_JOYBUTTONUP)
 		{
+			int raw_guide = 0;
+			if (PLAT_suppressRawJoy(event.jbutton.which)) {
+				if (!PLAT_rawButtonIsGuide(event.jbutton.which, event.jbutton.button))
+					continue;
+				raw_guide = 1;
+			}
 			uint8_t joy = event.jbutton.button;
 			pressed = event.type == SDL_JOYBUTTONDOWN;
 			// LOG_info("joy event: %i (%i)\n", joy,pressed);
-			if (joy == JOY_UP)
+			if (raw_guide)
+			{
+				btn = BTN_MENU;
+				id = BTN_ID_MENU;
+			}
+			else if (joy == JOY_UP)
 			{
 				btn = BTN_DPAD_UP;
 				id = BTN_ID_DPAD_UP;
@@ -3578,6 +3663,8 @@ FALLBACK_IMPLEMENTATION void PLAT_pollInput(void)
 		}
 		else if (event.type == SDL_JOYHATMOTION)
 		{
+			if (PLAT_suppressRawJoy(event.jhat.which))
+				continue;
 			int hats[4] = {-1, -1, -1, -1}; // -1=no change,0=up,1=down,2=left,3=right btn_ids
 			int hat = event.jhat.value;
 			// LOG_info("hat event: %i\n", hat);
@@ -3665,6 +3752,8 @@ FALLBACK_IMPLEMENTATION void PLAT_pollInput(void)
 		}
 		else if (event.type == SDL_JOYAXISMOTION)
 		{
+			if (PLAT_suppressRawJoy(event.jaxis.which))
+				continue;
 			int axis = event.jaxis.axis;
 			int val = event.jaxis.value;
 			// LOG_info("axis: %i (%i)\n", axis,val);
@@ -3709,9 +3798,11 @@ FALLBACK_IMPLEMENTATION void PLAT_pollInput(void)
 		}
 		else if (event.type == SDL_QUIT)
 		{
-			PWR_powerOff(0);
+			/* SIGTERM becomes SDL_QUIT. PWR_powerOff here made
+			 * killall nextui.elf shut the handheld down. */
 		}
-		else if (event.type == SDL_JOYDEVICEADDED || event.type == SDL_JOYDEVICEREMOVED)
+		else if (event.type == SDL_JOYDEVICEADDED || event.type == SDL_JOYDEVICEREMOVED ||
+			 event.type == SDL_CONTROLLERDEVICEADDED || event.type == SDL_CONTROLLERDEVICEREMOVED)
 		{
 			PAD_update(&event);
 		}
@@ -3734,8 +3825,8 @@ FALLBACK_IMPLEMENTATION void PLAT_pollInput(void)
 		}
 	}
 
-	if (lid.has_lid && PLAT_lidChanged(NULL))
-		pad.just_released |= BTN_SLEEP;
+	if (lid.has_lid && PLAT_lidChanged(NULL) && !lid.is_open)
+		pwr.requested_sleep = 1;
 }
 FALLBACK_IMPLEMENTATION int PLAT_shouldWake(void)
 {
@@ -3772,6 +3863,7 @@ FALLBACK_IMPLEMENTATION int PLAT_shouldWake(void)
 	return 0;
 }
 FALLBACK_IMPLEMENTATION int PLAT_supportsDeepSleep(void) { return 0; }
+FALLBACK_IMPLEMENTATION int PLAT_isUSBConnected(void) { return 0; }
 FALLBACK_IMPLEMENTATION int PLAT_deepSleep(void)
 {
 	const char *state_path = "/sys/power/state";
@@ -3841,7 +3933,7 @@ int PAD_tappedBtn(int btn, uint32_t now)
 		ignore_menu = 0;
 		menu_start = now;
 	}
-	else if (PAD_isPressed(btn) && BTN_MOD_BRIGHTNESS == btn && (PAD_justPressed(BTN_MOD_PLUS) || PAD_justPressed(BTN_MOD_MINUS)))
+	else if (PAD_isPressed(btn) && BTN_MOD_BRIGHTNESS == btn && (PAD_justPressed(BTN_MOD_PLUS) || PAD_justPressed(BTN_MOD_MINUS) || PAD_justPressed(BTN_Y)))
 	{
 		ignore_menu = 1;
 	}
@@ -4081,7 +4173,6 @@ void PWR_update(int *_dirty, int *_show_setting, PWR_callback_t before_sleep, PW
 	{
 		if (before_sleep)
 			before_sleep();
-		system("gametimectl.elf stop_all");
 		PWR_powerOff(0);
 	}
 
@@ -4102,16 +4193,26 @@ void PWR_update(int *_dirty, int *_show_setting, PWR_callback_t before_sleep, PW
 	if (screenOffDelay == 0 || (now - last_input_at >= screenOffDelay && PWR_preventAutosleep()))
 		last_input_at = now;
 
-	if (
-		pwr.requested_sleep ||											   // hardware requested sleep
-		(screenOffDelay > 0 && now - last_input_at >= screenOffDelay) ||   // autosleep
-		(pwr.can_sleep && PAD_justReleased(BTN_SLEEP) && power_pressed_at) // manual sleep
-	)
+	if (pwr.requested_sleep ||
+		(screenOffDelay > 0 && now - last_input_at >= screenOffDelay))
 	{
 		pwr.requested_sleep = 0;
 		if (before_sleep)
 			before_sleep();
+		/* Lid and idle timeout: screen + radios off, wait for wake.
+		 * Power button uses mem below. */
 		PWR_sleep();
+		if (after_sleep)
+			after_sleep();
+		last_input_at = now = SDL_GetTicks();
+		power_pressed_at = 0;
+		dirty = 1;
+	}
+	else if (pwr.can_sleep && PAD_justReleased(BTN_SLEEP) && power_pressed_at)
+	{
+		if (before_sleep)
+			before_sleep();
+		PWR_sleepNow();
 		if (after_sleep)
 			after_sleep();
 		last_input_at = now = SDL_GetTicks();
@@ -4125,7 +4226,13 @@ void PWR_update(int *_dirty, int *_show_setting, PWR_callback_t before_sleep, PW
 
 	int delay_settings = BTN_MOD_BRIGHTNESS == BTN_MENU; // when both volume and brighness require a modifier hide settings as soon as it is released
 #define SETTING_DELAY 500
-	if (show_setting && (now - setting_shown_at >= SETTING_DELAY || !delay_settings) && !PAD_isPressed(BTN_MOD_VOLUME) && !PAD_isPressed(BTN_MOD_BRIGHTNESS) && !PAD_isPressed(BTN_MOD_COLORTEMP))
+	/* BTN_MOD_VOLUME is BTN_NONE on this pad (PAD_isPressed(0) is always
+	 * false). Keep the overlay up while PLUS/MINUS is held or it hides
+	 * after 500ms on the first volume tap. */
+	if (show_setting && (now - setting_shown_at >= SETTING_DELAY || !delay_settings) &&
+		!PAD_isPressed(BTN_MOD_VOLUME) && !PAD_isPressed(BTN_MOD_BRIGHTNESS) &&
+		!PAD_isPressed(BTN_MOD_COLORTEMP) &&
+		!PAD_isPressed(BTN_MOD_PLUS) && !PAD_isPressed(BTN_MOD_MINUS))
 	{
 		show_setting = 0;
 		dirty = 1;
@@ -4158,6 +4265,36 @@ void PWR_update(int *_dirty, int *_show_setting, PWR_callback_t before_sleep, PW
 		}
 	}
 
+	/* Volume/brightness in the list and in Settings. In a pak,
+	 * zlyme-keylidmon applies the same keys (and grabs gpio-keys-volume
+	 * so RetroArch does not). justRepeated is set on the first press
+	 * and on the software repeat timer. */
+	if (InitializedSettings() && (PAD_justRepeated(BTN_MOD_PLUS) || PAD_justRepeated(BTN_MOD_MINUS)))
+	{
+		int plus = PAD_justRepeated(BTN_MOD_PLUS);
+		int minus = PAD_justRepeated(BTN_MOD_MINUS);
+		if (PAD_isPressed(BTN_MOD_BRIGHTNESS))
+		{
+			int v = GetBrightness();
+			if (plus && v < BRIGHTNESS_MAX)
+				SetBrightness(v + 1);
+			else if (minus && v > BRIGHTNESS_MIN)
+				SetBrightness(v - 1);
+			show_setting = 1;
+			setting_shown_at = now;
+		}
+		else
+		{
+			int v = GetVolume();
+			if (plus && v < VOLUME_MAX)
+				SetVolume(v + 1);
+			else if (minus && v > VOLUME_MIN)
+				SetVolume(v - 1);
+			show_setting = 2;
+			setting_shown_at = now;
+		}
+	}
+
 	if (InitializedSettings())
 	{
 		int muted = GetMute();
@@ -4172,7 +4309,7 @@ void PWR_update(int *_dirty, int *_show_setting, PWR_callback_t before_sleep, PW
 	LEDS_applyRules();
 
 	if (show_setting)
-		dirty = 1; // shm is slow or keymon is catching input on the next frame
+		dirty = 1; // shm is slow or zlyme-keylidmon is catching input on the next frame
 	if (_dirty)
 		*_dirty = dirty;
 	if (_show_setting)
@@ -4193,6 +4330,42 @@ void PWR_disablePowerOff(void)
 {
 	pwr.can_poweroff = 0;
 }
+
+#define ZLYME_KEYLIDMON_PIDFILE "/var/run/zlyme-keylidmon.pid"
+
+static void zlyme_keylidmon_signal(int sig)
+{
+	char buf[32];
+	FILE *f;
+	const char *signame;
+	char cmd[64];
+
+	f = fopen(ZLYME_KEYLIDMON_PIDFILE, "r");
+	if (f) {
+		if (fgets(buf, sizeof(buf), f)) {
+			pid_t pid = (pid_t)atoi(buf);
+			if (pid > 1)
+				kill(pid, sig);
+		}
+		fclose(f);
+	}
+	switch (sig) {
+	case SIGTERM:
+		signame = "TERM";
+		break;
+	case SIGSTOP:
+		signame = "STOP";
+		break;
+	case SIGCONT:
+		signame = "CONT";
+		break;
+	default:
+		return;
+	}
+	snprintf(cmd, sizeof(cmd), "killall -%s zlyme-keylidmon", signame);
+	system(cmd);
+}
+
 void PWR_powerOff(int reboot)
 {
 	if (pwr.can_poweroff)
@@ -4233,9 +4406,7 @@ void PWR_powerOff(int reboot)
 		GFX_blitMessage(font.large, msg, gfx.screen, &(SDL_Rect){0, 0, gfx.screen->w, gfx.screen->h}); //, NULL);
 		GFX_flip(gfx.screen);
 
-		system("killall -TERM keymon.elf");
-		system("killall -TERM batmon.elf");
-		system("killall -TERM audiomon.elf");
+		zlyme_keylidmon_signal(SIGTERM);
 
 		PWR_updateFrequency(-1, false);
 
@@ -4261,13 +4432,17 @@ static void PWR_enterSleep(void)
 		}
 		PLAT_enableBacklight(0);
 	}
-	system("killall -STOP keymon.elf");
-	system("killall -STOP batmon.elf");
-	system("killall -STOP audiomon.elf");
+	zlyme_keylidmon_signal(SIGSTOP);
+
+	PWR_setCPUSpeed(CPU_SPEED_POWERSAVE);
 
 	PWR_updateFrequency(-1, false);
 
 	sync();
+	/* ROCKNIX sleep.sh: stop BT (and Wi-Fi) before mem so the combo
+	 * chip GPIO cut in rtl8733bu_power_suspend_late cannot hang
+	 * hci_dev_close during freeze. */
+	system("/usr/sbin/zlyme-radios pre >/dev/null 2>&1");
 }
 static void PWR_exitSleep(void)
 {
@@ -4275,9 +4450,9 @@ static void PWR_exitSleep(void)
 
 	PWR_updateFrequency(-1, true);
 
-	system("killall -CONT keymon.elf");
-	system("killall -CONT batmon.elf");
-	system("killall -CONT audiomon.elf");
+	PWR_setCPUSpeed(CPU_SPEED_AUTO);
+
+	zlyme_keylidmon_signal(SIGCONT);
 
 	if (GetHDMI())
 	{
@@ -4296,6 +4471,11 @@ static void PWR_exitSleep(void)
 	// reinitialize audio after sleep otherwise it doesnt come back on sometimes
 	LOG_info("Reinitialize audio after sleep\n");
 	SND_resetAudio(snd.sample_rate_in, snd.frame_rate);
+
+	/* USB wifi (8733bu) is re-probed after mem. udhcpc/wpa do not
+	 * come back unless we start them again. Background: S30 waits
+	 * up to ~15s for association and would freeze the UI thread. */
+	system("/usr/sbin/zlyme-radios resume >/dev/null 2>&1 &");
 
 	sync();
 }
@@ -4349,8 +4529,6 @@ void PWR_sleep(void)
 {
 	LOG_info("Entering hybrid sleep\n");
 
-	system("gametimectl.elf stop_all");
-
 	GFX_clear(gfx.screen);
 	PAD_reset();
 	PWR_enterSleep();
@@ -4358,7 +4536,22 @@ void PWR_sleep(void)
 	PWR_exitSleep();
 	PAD_reset();
 
-	system("gametimectl.elf resume");
+	pwr.resume_tick = SDL_GetTicks();
+}
+
+void PWR_sleepNow(void)
+{
+	LOG_info("Entering mem sleep\n");
+
+	GFX_clear(gfx.screen);
+	PAD_reset();
+	PWR_enterSleep();
+	if (PLAT_supportsDeepSleep())
+		PWR_deepSleep();
+	else
+		PWR_waitForWake();
+	PWR_exitSleep();
+	PAD_reset();
 
 	pwr.resume_tick = SDL_GetTicks();
 }
