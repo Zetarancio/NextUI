@@ -14,11 +14,11 @@
 #define MAX_PATH 512
 
 #define ROMS_PATH SDCARD_PATH "/Roms"
-#define ROOT_SYSTEM_PATH SDCARD_PATH "/.system/"
-#define SYSTEM_PATH SDCARD_PATH "/.system/" PLATFORM
-#define RES_PATH SDCARD_PATH "/.system/res"
-#define USERDATA_PATH SDCARD_PATH "/.userdata/" PLATFORM
-#define SHARED_USERDATA_PATH SDCARD_PATH "/.userdata/shared"
+#define ROOT_SYSTEM_PATH "/usr/share/nextui"
+#define SYSTEM_PATH "/usr/share/nextui"
+#define RES_PATH "/usr/share/nextui/res"
+#define USERDATA_PATH SDCARD_PATH "/.config/nextui/" PLATFORM
+#define SHARED_USERDATA_PATH SDCARD_PATH "/.config/nextui/shared"
 #define PAKS_PATH SYSTEM_PATH "/paks"
 #define BIN_PATH SYSTEM_PATH "/bin"
 #define TOOLS_PATH SDCARD_PATH "/Tools/" PLATFORM
@@ -141,6 +141,19 @@ enum
 #define JOY_MENU_ALT2 JOY_NA
 #endif
 
+#ifndef BUTTON_L4
+#define BUTTON_L4 BUTTON_NA
+#define BUTTON_R4 BUTTON_NA
+#endif
+#ifndef CODE_L4
+#define CODE_L4 CODE_NA
+#define CODE_R4 CODE_NA
+#endif
+#ifndef JOY_L4
+#define JOY_L4 JOY_NA
+#define JOY_R4 JOY_NA
+#endif
+
 #ifndef AXIS_L2
 #define AXIS_L2	AXIS_NA
 #define AXIS_R2	AXIS_NA
@@ -160,7 +173,7 @@ enum
 #define HDMI_SIZE	FIXED_SIZE
 #endif
 
-#ifndef BTN_A // prevent collisions with input.h in keymon
+#ifndef BTN_A // prevent collisions with linux/input.h
 // TODO: doesn't this belong in api.h? it's meaningless without PAD_*
 enum {
 	BTN_ID_NONE = -1,
