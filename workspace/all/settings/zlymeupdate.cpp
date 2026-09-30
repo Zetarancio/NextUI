@@ -7,6 +7,7 @@ extern "C"
 }
 
 #include "zlymeupdate.hpp"
+#include "zlymemenu.hpp"
 
 #include <curl/curl.h>
 
@@ -563,16 +564,13 @@ bool battery_allows_download()
 
 void reboot_now()
 {
-    // Do not PWR_powerOff(): that GFX_quits, writes /tmp/reboot, and
-    // exits. nextui-session then restarts NextUI instead of rebooting
-    // (the flag is only read when nextui.elf itself exits).
+    /* nextui-session reads /tmp/reboot after settings.elf exits and
+     * calls zlyme-halt. Do not reboot from this process. */
     (void)system("sync");
-    if (access("/usr/sbin/zlyme-halt", X_OK) == 0)
-        (void)system("/usr/sbin/zlyme-halt reboot");
-    else
-        (void)system("reboot -f");
-    for (;;)
-        pause();
+    FILE *f = fopen("/tmp/reboot", "w");
+    if (f)
+        fclose(f);
+    Zlyme_requestLeave();
 }
 
 InputReactionHint do_check(AbstractMenuItem &item)

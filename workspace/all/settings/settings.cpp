@@ -673,11 +673,10 @@ int main(int argc, char *argv[])
             );
         }
 
-        Zlyme_appendSystemItems(systemItems);
         Zlyme_appendJoystickItem(systemItems);
         Zlyme_appendStorageItems(systemItems);
         Zlyme_appendBackupItem(systemItems);
-        Zlyme_appendFactoryResetItem(systemItems);
+        Zlyme_appendSystemItems(systemItems);
         systemItems.push_back(
             new MenuItem{ListItemType::Button, "Reset to defaults", "Resets all options in this menu to their default values.", ResetCurrentMenu});
 
@@ -1078,7 +1077,6 @@ int main(int argc, char *argv[])
             [&]() -> std::any { return bbver; }
             },
         };
-        Zlyme_appendAboutLogs(aboutItems);
         auto aboutMenu = new MenuList(MenuItemType::Fixed, "About", aboutItems);
 
         MenuList *buttonMenu = buildFnButtonMenu(); // nullptr if this device has none
@@ -1098,7 +1096,7 @@ int main(int argc, char *argv[])
 
         mainItems.push_back(new MenuItem{ListItemType::Generic, "Game", "Saves, RetroAchievements, and cleanup", {}, {}, nullptr, nullptr, DeferToSubmenu, inGameMenu});
         mainItems.push_back(new MenuItem{ListItemType::Generic, "Appearance", "UI customization", {}, {}, nullptr, nullptr, DeferToSubmenu, appearanceMenu});
-        mainItems.push_back(new MenuItem{ListItemType::Generic, "System", "Display, sleep, GPU, ZRAM, undervolt, backup", {}, {}, nullptr, nullptr, DeferToSubmenu, systemMenu});
+        mainItems.push_back(new MenuItem{ListItemType::Generic, "System", "Display, sleep, joysticks, and backup", {}, {}, nullptr, nullptr, DeferToSubmenu, systemMenu});
 
         if(deviceInfo.hasMuteToggle())
             mainItems.push_back(new MenuItem{ListItemType::Generic, "FN switch", "FN switch settings", {}, {}, nullptr, nullptr, DeferToSubmenu,
@@ -1111,6 +1109,7 @@ int main(int argc, char *argv[])
         mainItems.push_back(new MenuItem{ListItemType::Generic, "About", "Build and hardware info", {}, {}, nullptr, nullptr, DeferToSubmenu, aboutMenu});
 
         ctx.menu = new MenuList(MenuItemType::List, "Main", mainItems);
+        Zlyme_captureBootState();
 
         SDL_Surface* bgbmp = IMG_Load(SDCARD_PATH "/bg.png");
         SDL_Surface* convertedbg = SDL_ConvertSurfaceFormat(bgbmp, SDL_PIXELFORMAT_RGB565, 0);
@@ -1135,6 +1134,8 @@ int main(int argc, char *argv[])
 
         while (!appQuit)
         {
+            if (Zlyme_leaveRequested())
+                appQuit = 1;
             GFX_startFrame();
             PAD_poll();
 
@@ -1216,6 +1217,8 @@ int main(int argc, char *argv[])
             else
                 GFX_sync();
         }
+
+        Zlyme_promptRebootOnExit();
 
         // MenuItem owns submenus (appearance/system/…). Deleting those
         // pointers again aborted with "free(): double free" (pak 134).

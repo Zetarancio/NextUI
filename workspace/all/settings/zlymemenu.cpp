@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <sys/wait.h>
+#include <unistd.h>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -41,6 +42,25 @@ static void ctl_set(const char *name, const char *val)
 	std::string cmd = std::string("zlyme-ctl set ") + name + " " + val;
 	system(cmd.c_str());
 }
+
+static int g_leave_settings = 0;
+
+void Zlyme_requestLeave(void)
+{
+	g_leave_settings = 1;
+}
+
+int Zlyme_leaveRequested(void)
+{
+	return g_leave_settings;
+}
+
+void Zlyme_captureBootState(void)
+{
+	system("zlyme-bootcfg capture /tmp/zlyme-bootcfg");
+}
+
+static int wait_ab_game(const std::string &msg, const char *aLabel, const char *bLabel);
 
 static void service_apply(const char *name, const char *init, bool on)
 {
@@ -205,15 +225,61 @@ void Zlyme_appendStatusLed(std::vector<AbstractMenuItem *> &items)
 		}});
 }
 
+static int run_reset(const char *mode)
+{
+	std::string cmd = std::string("zlyme-reset ") + mode;
+	int status = system(cmd.c_str());
+	return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static void request_session_reboot(void)
+{
+	FILE *f = fopen("/tmp/reboot", "w");
+	if (f)
+		fclose(f);
+	Zlyme_requestLeave();
+}
+
+static InputReactionHint Zlyme_resetSettings(AbstractMenuItem &item)
+{
+	(void)item;
+	if (!wait_ab_game(
+		"Reset Zlyme settings?\nGames, saves, Wi-Fi and paired devices are kept.",
+		"RESET", "BACK"))
+		return NoOp;
+	if (!run_reset("settings")) {
+		MenuList::showOverlay("Reset failed", OverlayDismissMode::DismissOnA);
+		return NoOp;
+	}
+	MenuList::showOverlay("Settings reset", OverlayDismissMode::DismissOnA);
+	return NoOp;
+}
+
+static InputReactionHint Zlyme_factoryReset(AbstractMenuItem &item)
+{
+	(void)item;
+	if (!wait_ab_game(
+		"Factory reset Zlyme?\nSettings and stock Tools/Emus will be restored.\nGames, saves, Wi-Fi and personal content are kept.",
+		"RESET", "BACK"))
+		return NoOp;
+	if (!run_reset("factory")) {
+		MenuList::showOverlay("Reset failed", OverlayDismissMode::DismissOnA);
+		return NoOp;
+	}
+	request_session_reboot();
+	return NoOp;
+}
+
 void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 {
+	std::vector<AbstractMenuItem *> advanced;
 	const std::vector<std::any> gpu_v = {std::string("panfrost"), std::string("libmali")};
 	const std::vector<std::string> gpu_l = {"Panfrost", "mali_kbase"};
 	const std::vector<std::any> uv_v = {
 		std::string("off"), std::string("l1"), std::string("l2"), std::string("l3")};
 	const std::vector<std::string> uv_l = {"Off", "L1", "L2", "L3"};
 
-	items.push_back(new MenuItem{ListItemType::Generic, "GPU",
+	advanced.push_back(new MenuItem{ListItemType::Generic, "GPU",
 		"libmali (GLES+Vulkan) or Panfrost GLES.\nTakes effect on next boot.",
 		gpu_v, gpu_l,
 		[]() -> std::any {
@@ -222,7 +288,7 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 		},
 		[](const std::any &v) { ctl_set("gpu", std::any_cast<std::string>(v).c_str()); },
 		[]() { ctl_set("gpu", "libmali"); }});
-	items.push_back(new MenuItem{ListItemType::Generic, "CPU undervolt",
+	advanced.push_back(new MenuItem{ListItemType::Generic, "CPU undervolt",
 		"ROCKNIX opp-table overlays.\nTakes effect on next boot.",
 		uv_v, uv_l,
 		[]() -> std::any {
@@ -242,7 +308,7 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 
 	const std::vector<std::any> on_off_v = {false, true};
 	const std::vector<std::string> on_off = {"Off", "On"};
-	items.push_back(new MenuItem{ListItemType::Generic, "ZRAM swap",
+	advanced.push_back(new MenuItem{ListItemType::Generic, "ZRAM swap",
 		"384 MiB lz4 OOM net on 1 GiB.\nOff if a heavy emu feels spongy.",
 		on_off_v, on_off,
 		[]() -> std::any { return ctl_on("zram"); },
@@ -254,7 +320,7 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 			ctl_set("zram", "on");
 			system("zlyme-ctl apply-zram");
 		}});
-	items.push_back(new MenuItem{ListItemType::Generic, "USB OTG (top)",
+	advanced.push_back(new MenuItem{ListItemType::Generic, "USB OTG (top)",
 		"Turning it off saves a little power.\nTakes effect on next boot.",
 		on_off_v, on_off,
 		[]() -> std::any { return ctl_on("otg"); },
@@ -266,7 +332,7 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 			ctl_set("otg", "on");
 			system("zlyme-ctl apply-overlays");
 		}});
-	items.push_back(new MenuItem{ListItemType::Generic, "HDMI port",
+	advanced.push_back(new MenuItem{ListItemType::Generic, "HDMI port",
 		"Turning it off saves some power.\nTakes effect on next boot.",
 		on_off_v, on_off,
 		[]() -> std::any { return ctl_on("hdmi"); },
@@ -278,7 +344,7 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 			ctl_set("hdmi", "on");
 			system("zlyme-ctl apply-overlays");
 		}});
-	items.push_back(new MenuItem{ListItemType::Generic, "Second SD slot",
+	advanced.push_back(new MenuItem{ListItemType::Generic, "Second SD slot",
 		"Turning it off saves some power.\nTakes effect on next boot.",
 		on_off_v, on_off,
 		[]() -> std::any { return ctl_on("sd2"); },
@@ -290,6 +356,28 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 			ctl_set("sd2", "on");
 			system("zlyme-ctl apply-overlays");
 		}});
+	advanced.push_back(new MenuItem{ListItemType::Generic, "System logs",
+		"Write boot and per-pak logs under /storage/.logs.",
+		on_off_v, on_off,
+		[]() -> std::any { return ctl_on("logs"); },
+		[](const std::any &v) {
+			ctl_set("logs", std::any_cast<bool>(v) ? "on" : "off");
+			system("zlyme-ctl apply-logs");
+		},
+		[]() {
+			ctl_set("logs", "off");
+			system("zlyme-ctl apply-logs");
+		}});
+	advanced.push_back(new MenuItem{ListItemType::Button, "Reset Settings",
+		"Return product settings to defaults. Games, saves, Wi-Fi and paired devices stay.",
+		Zlyme_resetSettings});
+	advanced.push_back(new MenuItem{ListItemType::Button, "Factory Reset",
+		"Restore settings and stock Tools/Emus. Games, saves, Wi-Fi and personal content stay.",
+		Zlyme_factoryReset});
+	items.push_back(new MenuItem{ListItemType::Generic, "Advanced",
+		"GPU, power features, logs, and reset.",
+		{}, {}, nullptr, nullptr, DeferToSubmenu,
+		new MenuList(MenuItemType::Fixed, "Advanced", advanced)});
 }
 
 void Zlyme_appendBackupItem(std::vector<AbstractMenuItem *> &items)
@@ -300,25 +388,6 @@ void Zlyme_appendBackupItem(std::vector<AbstractMenuItem *> &items)
 	items.push_back(new MenuItem{ListItemType::Button, "Restore backup",
 		"Unpack zlyme-backup.tar.gz. Reboot after.",
 		Zlyme_restoreBackup});
-}
-
-static InputReactionHint Zlyme_factoryReset(AbstractMenuItem &item)
-{
-	(void)item;
-	system("mkdir -p /storage/.config/zlyme");
-	system("touch /storage/.config/zlyme/factory-reset");
-	system("rm -rf /storage/.config/nextui");
-	system("sync");
-	MenuList::showOverlay("Resetting stock paks. Rebooting.", OverlayDismissMode::DismissOnA);
-	system("reboot -f");
-	return NoOp;
-}
-
-void Zlyme_appendFactoryResetItem(std::vector<AbstractMenuItem *> &items)
-{
-	items.push_back(new MenuItem{ListItemType::Button, "Factory reset",
-		"Restore stock Tools and Emus from the image. Extra paks, Roms, Bios, Saves, and Wi-Fi stay. Reboots.",
-		Zlyme_factoryReset});
 }
 
 static bool extra_volume_mounted()
@@ -357,25 +426,6 @@ void Zlyme_appendStorageItems(std::vector<AbstractMenuItem *> &items)
 		Zlyme_ejectSd2});
 }
 
-void Zlyme_appendAboutLogs(std::vector<AbstractMenuItem *> &items)
-{
-	const std::vector<std::any> on_off_v = {false, true};
-	const std::vector<std::string> on_off = {"Off", "On"};
-
-	items.push_back(new MenuItem{ListItemType::Generic, "System logs",
-		"Write boot and per-pak logs to /storage/.logs\nso you can send them if something goes wrong.",
-		on_off_v, on_off,
-		[]() -> std::any { return ctl_on("logs"); },
-		[](const std::any &v) {
-			ctl_set("logs", std::any_cast<bool>(v) ? "on" : "off");
-			system("zlyme-ctl apply-logs");
-		},
-		[]() {
-			ctl_set("logs", "off");
-			system("zlyme-ctl apply-logs");
-		}});
-}
-
 static int wait_ab_game(const std::string &msg, const char *aLabel, const char *bLabel)
 {
 	for (;;) {
@@ -392,6 +442,17 @@ static int wait_ab_game(const std::string &msg, const char *aLabel, const char *
 		MenuList::showOverlayAB(msg, aLabel, bLabel);
 		GFX_sync();
 	}
+}
+
+void Zlyme_promptRebootOnExit(void)
+{
+	if (access("/tmp/reboot", F_OK) == 0)
+		return;
+	int status = system("zlyme-bootcfg dirty /tmp/zlyme-bootcfg");
+	if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		return;
+	if (wait_ab_game("Restart to apply changes?", "RESTART", "LATER"))
+		request_session_reboot();
 }
 
 static int cleanup_count(const char *action, std::string *extra)
