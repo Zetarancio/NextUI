@@ -1,9 +1,5 @@
 #include "zlymemenu.hpp"
 
-extern "C" {
-#include "config.h"
-}
-
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -401,8 +397,7 @@ static int cleanup_count(const char *action, std::string *extra)
 {
 	char cmd[384];
 	snprintf(cmd, sizeof(cmd),
-		"SAVE_FORMAT=%d STATE_FORMAT=%d zlyme-game-cleanup %s --dry-run 2>/dev/null",
-		CFG_getSaveFormat(), CFG_getStateFormat(), action);
+		"zlyme-game-cleanup %s --dry-run 2>/dev/null", action);
 	FILE *f = popen(cmd, "r");
 	if (!f)
 		return 0;
@@ -425,8 +420,7 @@ static void cleanup_run(const char *action)
 {
 	char cmd[256];
 	snprintf(cmd, sizeof(cmd),
-		"SAVE_FORMAT=%d STATE_FORMAT=%d zlyme-game-cleanup %s >/dev/null 2>&1",
-		CFG_getSaveFormat(), CFG_getStateFormat(), action);
+		"zlyme-game-cleanup %s >/dev/null 2>&1", action);
 	system(cmd);
 }
 
