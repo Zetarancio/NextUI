@@ -113,9 +113,9 @@ static void loadRomExtsOnce(void) {
 
 int isAllowedRom(const char* emu_tag, const char* file_name) {
 	if (!file_name || !file_name[0]) return 0;
-	if (isJunkFile(file_name)) return 0;
+	if (hide((char *)file_name)) return 0;
 	loadRomExtsOnce();
-	if (!emu_tag || !emu_tag[0] || rom_exts_n == 0) return 1;
+	if (!emu_tag || !emu_tag[0] || rom_exts_n == 0) return isJunkFile(file_name) ? 0 : 1;
 	const char *exts = NULL;
 	for (int i = 0; i < rom_exts_n; i++) {
 		if (exactMatch(rom_exts[i].tag, emu_tag)) {
@@ -123,7 +123,10 @@ int isAllowedRom(const char* emu_tag, const char* file_name) {
 			break;
 		}
 	}
-	if (!exts) return 1;
+	/* A console whitelist is the authority. PICO carts are .p8.png;
+	 * the junk list also names .png so screenshots stay hidden for
+	 * consoles that do not list that extension. */
+	if (!exts) return isJunkFile(file_name) ? 0 : 1;
 	const char *dot = strrchr(file_name, '.');
 	if (!dot || !dot[1] || strchr(dot + 1, '/')) return 0;
 	char ext[32];
