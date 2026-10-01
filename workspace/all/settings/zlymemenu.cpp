@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <mutex>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <fstream>
@@ -442,13 +444,148 @@ static int run_two(const char *bin, const char *a, const char *b)
 	return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
 
-static InputReactionHint Zlyme_formatStorage(AbstractMenuItem &item)
+struct FormatDev {
+	std::string dev;
+	std::string label;
+};
+
+static void format_status(const char *msg)
 {
-	(void)item;
-	if (system("/usr/sbin/zlyme-format-ui") != 0)
+	FILE *f = fopen("/tmp/zlyme-format.status", "w");
+	if (f) {
+		fprintf(f, "%s\n", msg);
+		fclose(f);
+	}
+	const char *log = getenv("ZLYME_PAK_LOG");
+	if (!log || !log[0])
+		return;
+	FILE *p = fopen(log, "a");
+	if (!p)
+		return;
+	fprintf(p, "format: %s\n", msg);
+	fclose(p);
+}
+
+static std::vector<FormatDev> format_devices()
+{
+	std::vector<FormatDev> out;
+	FILE *f = popen("/usr/sbin/zlyme-storage-format list", "r");
+	if (!f)
+		return out;
+	char line[512];
+	while (fgets(line, sizeof(line), f)) {
+		std::string row = trim(line);
+		if (row.empty())
+			continue;
+		std::string::size_type tab = row.find('\t');
+		FormatDev d;
+		if (tab == std::string::npos) {
+			d.dev = row;
+			d.label = row;
+		} else {
+			d.dev = row.substr(0, tab);
+			d.label = row.substr(tab + 1);
+			if (d.label.empty())
+				d.label = d.dev;
+		}
+		if (!d.dev.empty())
+			out.push_back(d);
+	}
+	pclose(f);
+	return out;
+}
+
+static bool format_present(const std::string &dev)
+{
+	for (const FormatDev &d : format_devices()) {
+		if (d.dev == dev)
+			return true;
+	}
+	return false;
+}
+
+static int format_exec(const char *dev, const char *fs)
+{
+	pid_t pid = fork();
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		execl("/usr/sbin/zlyme-storage-format", "zlyme-storage-format",
+			"format", dev, fs, "ZLYME-LIB", (char *)NULL);
+		_exit(127);
+	}
+	int status = 1;
+	if (waitpid(pid, &status, 0) < 0)
+		return -1;
+	return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
+}
+
+static InputReactionHint format_confirmed(const std::string &dev, const std::string &label,
+	const std::string &fsname, const char *fs)
+{
+	if (!format_present(dev)) {
+		format_status("device disappeared");
+		MenuList::showOverlay("Device disappeared", OverlayDismissMode::DismissOnA);
+		return NoOp;
+	}
+	std::string msg = label + "\nErase as " + fsname + "?\nALL DATA WILL BE LOST";
+	if (!wait_ab_game(msg, "ERASE", "BACK")) {
+		format_status("cancelled");
+		return NoOp;
+	}
+	if (!format_present(dev)) {
+		format_status("device disappeared");
+		MenuList::showOverlay("Device disappeared", OverlayDismissMode::DismissOnA);
+		return NoOp;
+	}
+	format_status("confirmed");
+	if (format_exec(dev.c_str(), fs) == 0) {
+		format_status("format succeeded");
+		MenuList::showOverlay("Format finished", OverlayDismissMode::DismissOnA);
+	} else {
+		format_status("format failed");
 		MenuList::showOverlay("Format failed", OverlayDismissMode::DismissOnA);
+	}
 	return NoOp;
 }
+
+class FormatDeviceMenu : public MenuList
+{
+public:
+	FormatDeviceMenu()
+		: MenuList(MenuItemType::Fixed, "Format storage", {})
+	{
+	}
+
+	void onShow() override
+	{
+		std::unique_lock<std::shared_mutex> lock(itemLock);
+		for (AbstractMenuItem *it : items)
+			delete it;
+		items.clear();
+		for (const FormatDev &d : format_devices()) {
+			std::string dev = d.dev;
+			std::string label = d.label;
+			std::vector<AbstractMenuItem *> fs;
+			fs.push_back(new MenuItem{ListItemType::Button, "exFAT", "",
+				[dev, label](AbstractMenuItem &) {
+					return format_confirmed(dev, label, "exFAT", "exfat");
+				}});
+			fs.push_back(new MenuItem{ListItemType::Button, "ext4", "",
+				[dev, label](AbstractMenuItem &) {
+					return format_confirmed(dev, label, "ext4", "ext4");
+				}});
+			items.push_back(new MenuItem{ListItemType::Button, label, dev,
+				DeferToSubmenu, new MenuList(MenuItemType::Fixed, "Filesystem", fs)});
+		}
+		if (items.empty()) {
+			items.push_back(new MenuItem{ListItemType::Button, "No removable storage", "",
+				[](AbstractMenuItem &) { return Exit; }});
+		}
+		scope.selected = 0;
+		layout_called = false;
+	}
+};
 
 void Zlyme_appendStorageItems(std::vector<AbstractMenuItem *> &items)
 {
@@ -498,18 +635,9 @@ void Zlyme_appendStorageItems(std::vector<AbstractMenuItem *> &items)
 			}});
 	}
 
-	FILE *fmt = popen("/usr/sbin/zlyme-storage-format list", "r");
-	bool can_format = false;
-	if (fmt) {
-		char buf[8];
-		can_format = fgets(buf, sizeof(buf), fmt) != NULL;
-		pclose(fmt);
-	}
-	if (can_format) {
-		storage.push_back(new MenuItem{ListItemType::Button, "Format removable storage",
-			"Erase a second SD or USB disk. The main card cannot be selected.",
-			Zlyme_formatStorage});
-	}
+	storage.push_back(new MenuItem{ListItemType::Button, "Format removable storage",
+		"Erase a second SD or USB disk. The main card cannot be selected.",
+		DeferToSubmenu, new FormatDeviceMenu()});
 
 	if (storage.empty())
 		return;
