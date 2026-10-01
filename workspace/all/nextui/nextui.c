@@ -4237,14 +4237,6 @@ int main (int argc, char *argv[]) {
 			sleep(4);
 			quit = 1;
 		}
-		/* SIGTERM is SDL_QUIT and is ignored so a stray kill does not
-		 * power the device off. /tmp/next is only read after this
-		 * process returns to nextui-session, so a handoff marker is
-		 * the clean way to leave the frontend and run that command. */
-		if (exists("/tmp/zlyme-session-handoff")) {
-			unlink("/tmp/zlyme-session-handoff");
-			quit = 1;
-		}
 	}
 
 	Menu_quit();
