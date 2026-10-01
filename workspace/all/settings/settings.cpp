@@ -165,7 +165,7 @@ namespace {
     struct ColorDef { int id; const char *name; const char *desc; uint32_t defaultColor; };
     static const ColorDef g_colorDefs[] = {
         {1, "Main Color",             "The color used to render main UI elements.",                          CFG_DEFAULT_COLOR1},
-        {2, "Primary Accent Color",   "The color used to highlight important things in the user interface.", CFG_DEFAULT_COLOR2},
+        {2, "Primary Accent Color",   "Highlight color for important UI items.", CFG_DEFAULT_COLOR2},
         {3, "Secondary Accent Color", "A secondary highlight color.",                                        CFG_DEFAULT_COLOR3},
         {4, "List Text",              "List text color",                                                     CFG_DEFAULT_COLOR4},
         {5, "List Text Selected",     "List selected text color",                                            CFG_DEFAULT_COLOR5},
@@ -218,24 +218,15 @@ namespace {
         return s.substr(i);
     }
 
-    static std::string nextui_short_version() {
-        std::ifstream t(ROOT_SYSTEM_PATH "/version.txt");
-        std::string s((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
+    static std::string product_version_token() {
+        std::ifstream t("/usr/share/zlyme/version");
+        std::string s;
+        if (t)
+            std::getline(t, s);
         s = trim_nl(s);
-        auto pos = s.rfind("-zlyme");
-        if (pos != std::string::npos)
-            s = s.substr(pos + 1);
-        std::ifstream d("/usr/share/nextui/build-date.txt");
-        std::string date;
-        if (d)
-            std::getline(d, date);
-        date = trim_nl(date);
-        if (!date.empty()) {
-            if (s.empty())
-                s = date;
-            else
-                s += " (" + date + ")";
-        }
+        size_t cut = s.find_first_of(" \t(");
+        if (cut != std::string::npos)
+            s = s.substr(0, cut);
         if (s.empty())
             s = "unknown";
         return s;
@@ -477,6 +468,12 @@ int main(int argc, char *argv[])
             []() -> std::any { return CFG_getShowFolderNamesAtRoot(); },
             [](const std::any &value) { CFG_setShowFolderNamesAtRoot(std::any_cast<bool>(value)); },
             []() { CFG_setShowFolderNamesAtRoot(CFG_DEFAULT_SHOWFOLDERNAMESATROOT);}});
+        appearanceItems.push_back(new MenuItem{ListItemType::Generic, "Default view", "The initial view to show on boot",
+            {(int)SCREEN_GAMELIST, (int)SCREEN_QUICKMENU},
+            {"Content List","Quick Menu"},
+            []() -> std::any { return CFG_getDefaultView(); },
+            [](const std::any &value){ CFG_setDefaultView(std::any_cast<int>(value)); },
+            []() { CFG_setDefaultView(CFG_DEFAULT_VIEW);}});
         appearanceItems.push_back(new MenuItem{ListItemType::Generic, "Show Recents", "Show \"Recently Played\" menu entry in game list.", {false, true}, on_off,
             []() -> std::any { return CFG_getShowRecents(); },
             [](const std::any &value) { CFG_setShowRecents(std::any_cast<bool>(value)); },
@@ -489,7 +486,7 @@ int main(int argc, char *argv[])
             []() -> std::any { return CFG_getShowGameArt(); },
             [](const std::any &value) { CFG_setShowGameArt(std::any_cast<bool>(value)); },
             []() { CFG_setShowGameArt(CFG_DEFAULT_SHOWGAMEART);}});
-        appearanceItems.push_back(new MenuItem{ListItemType::Generic, "Use folder background for ROMs", "If enabled, used the emulator background image. Otherwise uses the default.", {false, true}, on_off,
+        appearanceItems.push_back(new MenuItem{ListItemType::Generic, "Use folder background for ROMs", "Use each emulator image as its ROM list background.", {false, true}, on_off,
             []() -> std::any { return CFG_getRomsUseFolderBackground(); },
             [](const std::any &value) { CFG_setRomsUseFolderBackground(std::any_cast<bool>(value)); },
             []() { CFG_setRomsUseFolderBackground(CFG_DEFAULT_ROMSUSEFOLDERBACKGROUND);}});
@@ -591,13 +588,19 @@ int main(int argc, char *argv[])
 
         std::vector<AbstractMenuItem*> systemItems = {
             new MenuItem{ListItemType::Generic, "Display", "Brightness, panel refresh, screen timeout, display resolution", {}, {}, nullptr, nullptr, DeferToSubmenu, displayMenu},
+        };
+        if (deviceInfo.getPlatform() == DeviceInfo::my355) {
+            Zlyme_appendJoystickItem(systemItems);
+            Zlyme_appendStorageItems(systemItems);
+            Zlyme_appendSystemItems(systemItems);
+        }
+        systemItems.push_back(
             new MenuItem{ListItemType::Generic, "Volume", "Speaker volume",
             {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20},
             {"Muted", "5%","10%","15%","20%","25%","30%","35%","40%","45%","50%","55%","60%","65%","70%","75%","80%","85%","90%","95%","100%"},
             []() -> std::any{ return GetVolume(); }, [](const std::any &value)
             { SetVolume(std::any_cast<int>(value)); },
-            []() { SetVolume(SETTINGS_DEFAULT_VOLUME);}},
-        };
+            []() { SetVolume(SETTINGS_DEFAULT_VOLUME);}});
         Zlyme_appendStatusLed(systemItems);
         systemItems.insert(systemItems.end(), {
             new MenuItem{ListItemType::Generic, "Suspend timeout", "Time before device goes to sleep after screen is off (5-600s)", sleep_timeout_secs, sleep_timeout_labels, []() -> std::any
@@ -614,16 +617,6 @@ int main(int argc, char *argv[])
             [](const std::any &value)
             { CFG_setClock24H(std::any_cast<bool>(value)); },
             []() { CFG_setClock24H(CFG_DEFAULT_CLOCK24H);}},
-            new MenuItem{ListItemType::Generic, "Haptic feedback", "Enable or disable NextUI haptic feedback. Strength follows Joysticks > Rumble Strength.", {false, true}, on_off, []() -> std::any
-            { return CFG_getHaptics(); }, [](const std::any &value)
-            { CFG_setHaptics(std::any_cast<bool>(value)); },
-            []() { CFG_setHaptics(CFG_DEFAULT_HAPTICS);}},
-            new MenuItem{ListItemType::Generic, "Default view", "The initial view to show on boot",
-            {(int)SCREEN_GAMELIST, (int)SCREEN_QUICKMENU},
-            {"Content List","Quick Menu"},
-            []() -> std::any { return CFG_getDefaultView(); },
-            [](const std::any &value){ CFG_setDefaultView(std::any_cast<int>(value)); },
-            []() { CFG_setDefaultView(CFG_DEFAULT_VIEW);}},
         });
 
         if (tz_count > 0) {
@@ -644,6 +637,11 @@ int main(int argc, char *argv[])
                     TIME_setCurrentTimezone(zlyme_clock ? "UTC" : "Asia/Shanghai");
                 }});
         }
+        systemItems.push_back(
+            new MenuItem{ListItemType::Generic, "Haptic feedback", "Enable or disable haptic feedback on certain actions in the OS", {false, true}, on_off, []() -> std::any
+            { return CFG_getHaptics(); }, [](const std::any &value)
+            { CFG_setHaptics(std::any_cast<bool>(value)); },
+            []() { CFG_setHaptics(CFG_DEFAULT_HAPTICS);}});
 
         if(deviceInfo.getPlatform() == DeviceInfo::tg5040)
         {
@@ -673,10 +671,12 @@ int main(int argc, char *argv[])
             );
         }
 
-        Zlyme_appendJoystickItem(systemItems);
-        Zlyme_appendStorageItems(systemItems);
+        if (deviceInfo.getPlatform() != DeviceInfo::my355) {
+            Zlyme_appendJoystickItem(systemItems);
+            Zlyme_appendStorageItems(systemItems);
+            Zlyme_appendSystemItems(systemItems);
+        }
         Zlyme_appendBackupItem(systemItems);
-        Zlyme_appendSystemItems(systemItems);
         systemItems.push_back(
             new MenuItem{ListItemType::Button, "Reset to defaults", "Resets all options in this menu to their default values.", ResetCurrentMenu});
 
@@ -1044,8 +1044,8 @@ int main(int argc, char *argv[])
                 OverlayDismissMode::DismissOnA);
 
         std::vector<AbstractMenuItem*> aboutItems = {
-            new StaticMenuItem{ListItemType::Generic, "Version", "Frontend pin from the image.",
-            []() -> std::any { return nextui_short_version(); }},
+            new StaticMenuItem{ListItemType::Generic, "Version", "Installed Zlyme version.",
+            []() -> std::any { return product_version_token(); }},
             new StaticMenuItem{ListItemType::Generic, "Hardware", "Board name from the platform layer.",
             []() -> std::any {
                 return std::string(PLAT_getModel()); }
