@@ -3417,7 +3417,9 @@ int main (int argc, char *argv[]) {
 			int ow = GFX_blitHardwareGroup(screen, show_setting);
 			if (currentScreen == SCREEN_EDITPREFS) {
 				int rows = editprefs_rows();
-				int y = SCALE1(PADDING + PILL_SIZE + BUTTON_MARGIN);
+				/* Below the status pill, not on top of it. */
+				int content_y = SCALE1(PADDING + PILL_SIZE + BUTTON_MARGIN);
+				int y = content_y + SCALE1(PILL_SIZE + BUTTON_MARGIN);
 				const char *gov = edit_gov_label(editprefs.gov_i);
 				GFX_clearLayers(LAYER_ALL);
 				/* Theme background, not leftover game-list pixels. */
@@ -3426,14 +3428,17 @@ int main (int argc, char *argv[]) {
 				if (editprefs.confirm) {
 					GFX_blitMessage(font.large,
 						"Delete this game?\nROM and its matching saves will be removed.",
-						screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING),
-							screen->w - SCALE1(PADDING * 2), screen->h - SCALE1(PILL_SIZE * 2)});
+						screen, &(SDL_Rect){SCALE1(PADDING), content_y,
+							screen->w - SCALE1(PADDING * 2), screen->h - content_y - SCALE1(PILL_SIZE * 2)});
 					GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 0);
 					GFX_blitButtonGroup((char*[]){ "A","DELETE", NULL }, 1, screen, 1);
 				} else {
-					SDL_Surface *title = TTF_RenderUTF8_Blended(font.large, editprefs.title, COLOR_WHITE);
+					char title_fit[256];
+					GFX_getTextWidth(font.large, editprefs.title, title_fit,
+						screen->w - SCALE1(PADDING * 2), SCALE1(BUTTON_PADDING));
+					SDL_Surface *title = TTF_RenderUTF8_Blended(font.large, title_fit, COLOR_WHITE);
 					if (title) {
-						SDL_Rect dst = {SCALE1(PADDING), SCALE1(PADDING), title->w, title->h};
+						SDL_Rect dst = {SCALE1(PADDING), content_y, title->w, title->h};
 						SDL_BlitSurface(title, NULL, screen, &dst);
 						SDL_FreeSurface(title);
 					}
@@ -3824,6 +3829,12 @@ int main (int argc, char *argv[]) {
 					if(CFG_getShowGameArt()) {
 						char thumbpath[1024];
 						snprintf(thumbpath, sizeof(thumbpath), "%s/.media/%s.png", rompath, res_copy);
+						/* A BBS .p8.png is the cartridge and its label.
+						 * Use it only when NextUI has no .media art. */
+						if (!exists(thumbpath) && entry->path
+							&& strstr(entry->path, "/Pico-8-native/bbs/carts/")
+							&& suffixMatch(".p8.png", entry->path))
+							snprintf(thumbpath, sizeof(thumbpath), "%s", entry->path);
 						had_thumb = 0;
 						startLoadThumb(thumbpath, onThumbLoaded, NULL);
 						int max_w = (int)(screen->w - (screen->w * CFG_getGameArtWidth()));
