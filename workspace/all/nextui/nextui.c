@@ -1214,75 +1214,68 @@ static void addEntriesMergeDirs(Array* entries, char* path) {
 	}
 }
 
-/* Splore writes downloaded carts under Pico-8-native/bbs/carts.
- * They stay owned by native PICO-8. This only lists them. */
-static void addPicoBbsCarts(Array *entries) {
-	char dir[MAX_PATH];
+/* A finished Splore cart. temp-* is a partial cache file, not a game. */
+static int picoBbsCartName(const char *name) {
+	if (!name || !name[0] || name[0] == '.')
+		return 0;
+	if (!strncmp(name, "temp-", 5))
+		return 0;
+	if (suffixMatch(".p8.png", name) || suffixMatch(".p8", name))
+		return 1;
+	return 0;
+}
+
+static int picoBbsShardName(const char *name) {
+	const char *p;
+	if (!name || !name[0])
+		return 0;
+	for (p = name; *p; p++) {
+		if (*p < '0' || *p > '9')
+			return 0;
+	}
+	return 1;
+}
+
+/* List carts in one directory. Titles come from map.txt, written by
+ * zlyme-pico-bbs when the catalog changes. This path does not parse
+ * carts and does not copy them. */
+static void addPicoBbsDir(Array *entries, const char *dir) {
 	DIR *dh;
 	struct dirent *dp;
-	snprintf(dir, sizeof(dir), "%s/Pico-8-native/bbs/carts", SHARED_USERDATA_PATH);
 	dh = opendir(dir);
 	if (!dh)
 		return;
 	while ((dp = readdir(dh)) != NULL) {
 		char full[MAX_PATH];
-		char stem[256];
-		char title[256];
-		char *cut;
-		if (hide(dp->d_name))
-			continue;
-		if (!suffixMatch(".p8.png", dp->d_name) && !suffixMatch(".p8", dp->d_name))
+		if (!picoBbsCartName(dp->d_name))
 			continue;
 		snprintf(full, sizeof(full), "%s/%s", dir, dp->d_name);
 		if (!exists(full))
 			continue;
-		snprintf(stem, sizeof(stem), "%s", dp->d_name);
-		cut = strstr(stem, ".p8");
-		if (cut)
-			*cut = '\0';
-		snprintf(title, sizeof(title), "%s", dp->d_name);
-		{
-			DIR *nh = opendir(dir);
-			struct dirent *np;
-			if (nh) {
-				while ((np = readdir(nh)) != NULL) {
-					char nfo[MAX_PATH];
-					FILE *nf;
-					char line[256];
-					int lid_ok = 0;
-					char got[256];
-					if (!suffixMatch(".nfo", np->d_name))
-						continue;
-					snprintf(nfo, sizeof(nfo), "%s/%s", dir, np->d_name);
-					nf = fopen(nfo, "r");
-					if (!nf)
-						continue;
-					got[0] = '\0';
-					while (fgets(line, sizeof(line), nf)) {
-						char *nl = strchr(line, '\n');
-						if (nl) *nl = '\0';
-						if (prefixMatch("lid:", line) && exactMatch(line + 4, stem))
-							lid_ok = 1;
-						if (prefixMatch("title:", line) && line[6])
-							snprintf(got, sizeof(got), "%s", line + 6);
-					}
-					fclose(nf);
-					if (lid_ok && got[0]) {
-						snprintf(title, sizeof(title), "%s", got);
-						break;
-					}
-				}
-				closedir(nh);
-			}
-		}
-		{
-			Entry *e = Entry_new(full, ENTRY_ROM);
-			if (e && strcmp(title, dp->d_name) != 0) {
-				free(e->name);
-				e->name = strdup(title);
-			}
-			Array_push(entries, e);
-		}
+		Array_push(entries, Entry_new(full, ENTRY_ROM));
+	}
+	closedir(dh);
+}
+
+/* Splore writes downloaded carts under Pico-8-native/bbs/carts.
+ * pico-8 also shards numeric ids one directory under bbs (bbs/1/…).
+ * They stay owned by native PICO-8. This only lists them. */
+static void addPicoBbsCarts(Array *entries) {
+	char root[MAX_PATH];
+	char dir[MAX_PATH];
+	DIR *dh;
+	struct dirent *dp;
+	snprintf(root, sizeof(root), "%s/Pico-8-native/bbs", SHARED_USERDATA_PATH);
+	snprintf(dir, sizeof(dir), "%s/carts", root);
+	addPicoBbsDir(entries, dir);
+	dh = opendir(root);
+	if (!dh)
+		return;
+	while ((dp = readdir(dh)) != NULL) {
+		if (!picoBbsShardName(dp->d_name))
+			continue;
+		snprintf(dir, sizeof(dir), "%s/%s", root, dp->d_name);
+		addPicoBbsDir(entries, dir);
 	}
 	closedir(dh);
 }
@@ -3830,11 +3823,16 @@ int main (int argc, char *argv[]) {
 						char thumbpath[1024];
 						snprintf(thumbpath, sizeof(thumbpath), "%s/.media/%s.png", rompath, res_copy);
 						/* A BBS .p8.png is the cartridge and its label.
-						 * Use it only when NextUI has no .media art. */
+						 * .media above wins. temp-* is not a finished cart.
+						 * Any other PNG is left alone. */
 						if (!exists(thumbpath) && entry->path
-							&& strstr(entry->path, "/Pico-8-native/bbs/carts/")
-							&& suffixMatch(".p8.png", entry->path))
-							snprintf(thumbpath, sizeof(thumbpath), "%s", entry->path);
+							&& strstr(entry->path, "/Pico-8-native/bbs/")
+							&& suffixMatch(".p8.png", entry->path)) {
+							const char *base = strrchr(entry->path, '/');
+							base = base ? base + 1 : entry->path;
+							if (strncmp(base, "temp-", 5) != 0)
+								snprintf(thumbpath, sizeof(thumbpath), "%s", entry->path);
+						}
 						had_thumb = 0;
 						startLoadThumb(thumbpath, onThumbLoaded, NULL);
 						int max_w = (int)(screen->w - (screen->w * CFG_getGameArtWidth()));

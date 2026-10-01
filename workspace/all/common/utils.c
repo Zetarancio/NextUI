@@ -691,8 +691,10 @@ void getEmuName(const char* in_name, char* out_name) { // NOTE: both char arrays
 	int i, n;
 	size_t len;
 
-	/* Splore downloads are not under a "Name (TAG)" folder. */
-	if (in_name && strstr(in_name, "/Pico-8-native/bbs/carts/")) {
+	/* Splore downloads are not under a "Name (TAG)" folder.
+	 * carts/ is the layout this image has seen. Numeric shards
+	 * (bbs/1/…) are one directory under bbs as well. */
+	if (in_name && strstr(in_name, "/Pico-8-native/bbs/")) {
 		strcpy(out_name, "PICO");
 		return;
 	}
