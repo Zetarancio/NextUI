@@ -2277,15 +2277,15 @@ static int editprefs_rows(void)
 static void editprefs_blit_row(SDL_Surface *screen, int y, int selected, const char *label, const char *value)
 {
 	SDL_Rect row = {SCALE1(PADDING), y, screen->w - SCALE1(PADDING * 2), SCALE1(PILL_SIZE)};
-	SDL_Color color = selected ? COLOR_DARK_TEXT : COLOR_WHITE;
+	SDL_Color color = uintToColour(selected ? THEME_COLOR5_255 : THEME_COLOR4_255);
 	SDL_Surface *left;
 	SDL_Surface *right;
 	SDL_Rect dst;
 
 	if (selected)
-		GFX_blitPillLight(ASSET_BUTTON, screen, &row);
+		GFX_blitPillDark(ASSET_WHITE_PILL, screen, &row);
 	left = TTF_RenderUTF8_Blended(font.large, label, color);
-	right = TTF_RenderUTF8_Blended(font.large, value, color);
+	right = (value && value[0]) ? TTF_RenderUTF8_Blended(font.large, value, color) : NULL;
 	if (left) {
 		dst.x = row.x + SCALE1(BUTTON_PADDING);
 		dst.y = row.y + (row.h - left->h) / 2;
@@ -3441,10 +3441,13 @@ int main (int argc, char *argv[]) {
 					if (editprefs.path[0]) {
 						int dy = rows > 1 ? 2 : 1;
 						editprefs_blit_row(screen, y + dy * SCALE1(PILL_SIZE + BUTTON_MARGIN),
-							editprefs.row == rows, "Delete game", "A");
+							editprefs.row == rows, "Delete game", NULL);
 					}
 					GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 0);
-					GFX_blitButtonGroup((char*[]){ "X","INHERIT", "A","SAVE", NULL }, 1, screen, 1);
+					if (editprefs.path[0] && editprefs.row == rows)
+						GFX_blitButtonGroup((char*[]){ "A","DELETE", NULL }, 1, screen, 1);
+					else
+						GFX_blitButtonGroup((char*[]){ "X","INHERIT", "A","SAVE", NULL }, 1, screen, 1);
 				}
 				lastScreen = SCREEN_EDITPREFS;
 			}
