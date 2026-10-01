@@ -635,6 +635,8 @@ void Zlyme_appendStorageItems(std::vector<AbstractMenuItem *> &items)
 			}});
 	}
 
+	Zlyme_appendGameFolders(storage);
+
 	storage.push_back(new MenuItem{ListItemType::Button, "Format removable storage",
 		"Erase a second SD or USB disk. The main card cannot be selected.",
 		DeferToSubmenu, new FormatDeviceMenu()});
@@ -642,7 +644,7 @@ void Zlyme_appendStorageItems(std::vector<AbstractMenuItem *> &items)
 	if (storage.empty())
 		return;
 	items.push_back(new MenuItem{ListItemType::Generic, "Storage",
-		"Library cards, PortMaster, and formatting.",
+		"Library cards, game folders, PortMaster, and formatting.",
 		{}, {}, nullptr, nullptr, DeferToSubmenu,
 		new MenuList(MenuItemType::Fixed, "Storage", storage)});
 }

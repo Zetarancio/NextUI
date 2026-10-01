@@ -754,39 +754,65 @@ static int hasPico8Bios(void)
 	return 0;
 }
 
-static int hasRomsIn(const char *roms_root, char* dir_name) {
+static int easyrpgIsGameDir(const char *dir_path, const char *name);
+
+/* A system folder counts only when it contains a launchable game.
+ * An empty directory, save tree, artwork folder, or other nested
+ * directory is not a game. EasyRPG game folders and real ROM files,
+ * including ROMs inside a normal user subfolder, are. */
+#define ROM_SCAN_MAX_DEPTH 8
+static int dirHasLaunchable(const char *dir, const char *emu_name, int depth)
+{
+	DIR *dh;
+	struct dirent *dp;
+	char full[512];
 	int has = 0;
+
+	if (!dir || depth > ROM_SCAN_MAX_DEPTH)
+		return 0;
+	dh = opendir(dir);
+	if (!dh)
+		return 0;
+	while ((dp = readdir(dh)) != NULL) {
+		if (hide(dp->d_name))
+			continue;
+		snprintf(full, sizeof(full), "%s/%s", dir, dp->d_name);
+		if (!entryIsDir(full, dp->d_type)) {
+			if (isAllowedRom(emu_name, dp->d_name)) {
+				has = 1;
+				break;
+			}
+			continue;
+		}
+		if (isJunkDir(dp->d_name))
+			continue;
+		if (exactMatch((char *)emu_name, "EASYRPG") &&
+		    easyrpgIsGameDir(full, dp->d_name)) {
+			has = 1;
+			break;
+		}
+		if (skipCompanionFolder(dir, dp->d_name))
+			continue;
+		if (dirHasLaunchable(full, emu_name, depth + 1)) {
+			has = 1;
+			break;
+		}
+	}
+	closedir(dh);
+	return has;
+}
+
+static int hasRomsIn(const char *roms_root, char* dir_name) {
 	char emu_name[256];
 	char rom_path[512];
 
 	getEmuName(dir_name, emu_name);
 
-	if (!hasEmu(emu_name)) return has;
+	if (!hasEmu(emu_name)) return 0;
 	if (exactMatch(emu_name, "PICO") && !hasPico8Bios()) return 0;
 
-	snprintf(rom_path, sizeof(rom_path), "%s/%s/", roms_root, dir_name);
-	DIR *dh = opendir(rom_path);
-	if (dh!=NULL) {
-		struct dirent *dp;
-		char full[512];
-		while((dp = readdir(dh)) != NULL) {
-			if (hide(dp->d_name)) continue;
-			if (isAllowedRom(emu_name, dp->d_name)) {
-				has = 1;
-				break;
-			}
-			if (isJunkDir(dp->d_name)) continue;
-			if (dp->d_type == DT_REG)
-				continue;
-			snprintf(full, sizeof(full), "%s%s", rom_path, dp->d_name);
-			if (entryIsDir(full, dp->d_type)) {
-				has = 1;
-				break;
-			}
-		}
-		closedir(dh);
-	}
-	return has;
+	snprintf(rom_path, sizeof(rom_path), "%s/%s", roms_root, dir_name);
+	return dirHasLaunchable(rom_path, emu_name, 0);
 }
 
 static int hasTools(void) {
