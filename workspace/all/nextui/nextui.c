@@ -3240,6 +3240,11 @@ int main (int argc, char *argv[]) {
 				editprefs_open(sel);
 				if (editprefs.open) {
 					currentScreen = SCREEN_EDITPREFS;
+					is_scrolling = 0;
+					setAnimationDraw(0);
+					GFX_clearLayers(LAYER_TRANSITION);
+					GFX_clearLayers(LAYER_SCROLLTEXT);
+					GFX_clearLayers(LAYER_THUMBNAIL);
 					dirty = 1;
 				}
 			}
@@ -4083,7 +4088,7 @@ int main (int argc, char *argv[]) {
 			} else {
 				dirty = 0;
 			}
-		} else if(getAnimationDraw() || folderbgchanged || thumbchanged || is_scrolling) {
+		} else if(currentScreen == SCREEN_GAMELIST && (getAnimationDraw() || folderbgchanged || thumbchanged || is_scrolling)) {
 			// honestly this whole thing is here only for the scrolling text, I set it now to run this at 30fps which is enough for scrolling text, should move this to seperate animation function eventually
 			Uint32 now = SDL_GetTicks();
 			Uint32 frame_start = now;
@@ -4134,7 +4139,7 @@ int main (int argc, char *argv[]) {
 				setAnimationDraw(0);
 			}
 			SDL_UnlockMutex(animMutex);
-			if (currentScreen != SCREEN_GAMESWITCHER && currentScreen != SCREEN_QUICKMENU) {
+			if (currentScreen == SCREEN_GAMELIST) {
 				if(is_scrolling && pillanimdone && currentAnimQueueSize < 1) {
 					int ow = GFX_blitHardwareGroup(screen, show_setting);
 					Entry* entry = top->entries->items[top->selected];
