@@ -1027,6 +1027,7 @@ int main(int argc, char *argv[])
             [](const std::any &value){ CFG_setUseExtractedFileName(std::any_cast<bool>(value)); },
             []() { CFG_setUseExtractedFileName(CFG_DEFAULT_EXTRACTEDFILENAME);}});
         }
+        Zlyme_appendGameFolders(gameItems);
         Zlyme_appendGameCleanup(gameItems);
         auto inGameMenu = new MenuList(MenuItemType::List, "Game", std::move(gameItems));
 

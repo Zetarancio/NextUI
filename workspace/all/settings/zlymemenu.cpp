@@ -740,6 +740,103 @@ static InputReactionHint cleanup_button(const char *action, const char *empty_ms
 	return NoOp;
 }
 
+static std::string library_label(const std::string &root)
+{
+	if (root == "/storage")
+		return "SD card 1";
+	if (root == "/mnt/sd2")
+		return "SD card 2";
+	const std::string media = "/mnt/media/";
+	if (root.compare(0, media.size(), media) == 0) {
+		std::string name = root.substr(media.size());
+		if (name.empty())
+			return "USB";
+		return "USB: " + name;
+	}
+	return root;
+}
+
+static std::vector<std::string> active_libraries()
+{
+	const char *path = getenv("ZLYME_LIBRARIES_FILE");
+	if (!path || !path[0])
+		path = "/run/zlyme/libraries";
+	std::vector<std::string> out;
+	std::ifstream in(path);
+	std::string line;
+	while (std::getline(in, line)) {
+		line = trim(line);
+		if (!line.empty())
+			out.push_back(line);
+	}
+	return out;
+}
+
+static int populate_exec(const std::string &root)
+{
+	pid_t pid = fork();
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		execl("/usr/sbin/zlyme-library-populate", "zlyme-library-populate",
+			root.c_str(), (char *)NULL);
+		_exit(127);
+	}
+	int status = 1;
+	if (waitpid(pid, &status, 0) < 0)
+		return -1;
+	if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+		return 0;
+	return -1;
+}
+
+class GameFolderMenu : public MenuList
+{
+public:
+	GameFolderMenu()
+		: MenuList(MenuItemType::Fixed, "Create game folders", {})
+	{
+	}
+
+	void onShow() override
+	{
+		std::unique_lock<std::shared_mutex> lock(itemLock);
+		for (AbstractMenuItem *it : items)
+			delete it;
+		items.clear();
+		for (const std::string &root : active_libraries()) {
+			std::string label = library_label(root);
+			items.push_back(new MenuItem{ListItemType::Button, label, root,
+				[root, label](AbstractMenuItem &) {
+					if (populate_exec(root) == 0)
+						MenuList::showOverlay("Game folders created",
+							OverlayDismissMode::DismissOnA);
+					else
+						MenuList::showOverlay("Library unavailable",
+							OverlayDismissMode::DismissOnA);
+					return NoOp;
+				}});
+		}
+		if (items.empty()) {
+			items.push_back(new MenuItem{ListItemType::Button, "No library", "",
+				[](AbstractMenuItem &) {
+					MenuList::showOverlay("Library unavailable",
+						OverlayDismissMode::DismissOnA);
+					return Exit;
+				}});
+		}
+		scope.selected = 0;
+		layout_called = false;
+	}
+};
+
+void Zlyme_appendGameFolders(std::vector<AbstractMenuItem *> &items)
+{
+	items.push_back(new MenuItem{ListItemType::Button, "Create game folders",
+		"Create missing ROM, BIOS and save folders on a library.",
+		DeferToSubmenu, new GameFolderMenu()});
+}
+
 void Zlyme_appendGameCleanup(std::vector<AbstractMenuItem *> &items)
 {
 	items.push_back(new MenuItem{ListItemType::Button, "Clean junk",

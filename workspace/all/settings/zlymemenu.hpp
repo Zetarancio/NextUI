@@ -11,6 +11,7 @@ void Zlyme_appendStatusLed(std::vector<AbstractMenuItem *> &items);
 void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items);
 void Zlyme_appendBackupItem(std::vector<AbstractMenuItem *> &items);
 void Zlyme_appendStorageItems(std::vector<AbstractMenuItem *> &items);
+void Zlyme_appendGameFolders(std::vector<AbstractMenuItem *> &items);
 void Zlyme_appendGameCleanup(std::vector<AbstractMenuItem *> &items);
 void Zlyme_captureBootState(void);
 void Zlyme_promptRebootOnExit(void);
