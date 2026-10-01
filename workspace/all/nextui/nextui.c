@@ -3415,6 +3415,9 @@ int main (int argc, char *argv[]) {
 				int y = SCALE1(PADDING + PILL_SIZE + BUTTON_MARGIN);
 				const char *gov = edit_gov_label(editprefs.gov_i);
 				GFX_clearLayers(LAYER_ALL);
+				/* Theme background, not leftover game-list pixels. */
+				SDL_FillRect(screen, NULL, THEME_COLOR7);
+				ow = GFX_blitHardwareGroup(screen, show_setting);
 				if (editprefs.confirm) {
 					GFX_blitMessage(font.large,
 						"Delete this game?\nROM and its matching saves will be removed.",
