@@ -180,6 +180,40 @@ std::string token_now()
     return read_first_line(kTokenFile);
 }
 
+void proxy_curl(std::string &proxy, std::string &noproxy)
+{
+    proxy.clear();
+    noproxy.clear();
+    FILE *f = popen("zlyme-proxy curl-args", "r");
+    if (!f)
+        return;
+    std::string text;
+    char buf[512];
+    while (fgets(buf, sizeof(buf), f))
+        text += buf;
+    pclose(f);
+    std::string key;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t nl = text.find('\n', pos);
+        if (nl == std::string::npos)
+            nl = text.size();
+        std::string line = text.substr(pos, nl - pos);
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        pos = nl + 1;
+        if (line == "--proxy" || line == "--noproxy") {
+            key = line;
+            continue;
+        }
+        if (key == "--proxy")
+            proxy = line;
+        else if (key == "--noproxy")
+            noproxy = line;
+        key.clear();
+    }
+}
+
 std::string ca_path()
 {
     const char *cands[] = {
@@ -516,6 +550,13 @@ bool curl_to_file(const std::string &url, long asset_id, bool use_auth,
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, xfer_cb);
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, st);
     curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE, (curl_off_t)already);
+    std::string proxy;
+    std::string noproxy;
+    proxy_curl(proxy, noproxy);
+    /* Empty proxy clears a value inherited from the process environment. */
+    curl_easy_setopt(curl, CURLOPT_PROXY, proxy.empty() ? "" : proxy.c_str());
+    if (!noproxy.empty())
+        curl_easy_setopt(curl, CURLOPT_NOPROXY, noproxy.c_str());
     if (hdrs)
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
     if (!ca.empty())
