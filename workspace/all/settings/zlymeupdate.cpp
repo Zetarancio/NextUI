@@ -56,6 +56,7 @@ struct ReleaseMeta {
     std::string sha_url;
     long sha_id = 0;
     std::string body;
+    std::string match;
 };
 
 ReleaseMeta g_rel;
@@ -324,18 +325,6 @@ std::string short_rel_label()
     return "update";
 }
 
-bool same_running_build()
-{
-    if (g_rel.tar_name.empty())
-        return false;
-    std::string inst = installed_version();
-    std::string id = short_build_id(g_rel.tar_name);
-    if (!id.empty() && inst.find(id) != std::string::npos)
-        return true;
-    std::string compact = tar_date_compact(g_rel.tar_name);
-    return !compact.empty() && inst.find(compact) != std::string::npos;
-}
-
 struct StayAwake {
     StayAwake()
     {
@@ -399,6 +388,8 @@ ReleaseMeta parse_meta(const std::string &text)
             m.sha_id = strtol(v.c_str(), nullptr, 10);
         else if (k == "BODY_FILE")
             body_file = v;
+        else if (k == "MATCH")
+            m.match = v;
     }
     if (!body_file.empty())
         m.body = read_file(body_file.c_str());
@@ -695,12 +686,10 @@ InputReactionHint do_download(AbstractMenuItem &item)
         return NoOp;
 
     std::string confirm;
-    if (same_running_build()) {
-        confirm = "This is the firmware already running.\nDownload ";
-        confirm += short_rel_label();
-        if (g_rel.tar_size > 0)
-            confirm += " (" + fmt_mb(g_rel.tar_size) + ")";
-        confirm += " anyway?";
+    if (g_rel.match == "exact-root") {
+        confirm = "This exact firmware is already installed.\nDownload/reinstall it anyway?";
+    } else if (g_rel.match == "same-version") {
+        confirm = "This release version is already installed.\nDownload/reinstall it anyway?";
     } else {
         confirm = "Download " + short_rel_label();
         if (g_rel.tar_size > 0)
