@@ -736,14 +736,12 @@ public:
     {
     }
 
-    void setNotes(const std::string &preamble_in, const std::string &body_in)
+    void setNotes(const std::string &body_in)
     {
-        preamble = preamble_in;
         body = body_in;
         scroll = 0;
         wrapped_w = -1;
         lines.clear();
-        head.clear();
     }
 
     void drawCustom(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rect &dstTitle) override
@@ -751,25 +749,21 @@ public:
         (void)dstTitle;
         if (!surface || !font.small)
             return;
-        TTF_Font *head_font = font.tiny ? font.tiny : font.small;
         int max_w = dst.w - SCALE1(12);
         if (max_w < 40)
             max_w = dst.w > 0 ? dst.w : 40;
         if (wrapped_w != max_w) {
-            head.clear();
             lines.clear();
-            notes_split(head, head_font, preamble, max_w);
             notes_split(lines, font.small, body, max_w);
             wrapped_w = max_w;
         }
         int body_h = TTF_FontHeight(font.small);
-        int head_h = TTF_FontHeight(head_font);
         if (body_h < 1)
             body_h = 16;
-        if (head_h < 1)
-            head_h = body_h;
-        int hint_h = head_h;
+        // The hint pills sit on the full screen, overlapping the bottom of dst.
+        int hint_reserve = SCALE1(PILL_SIZE);
         int y = dst.y;
+        int top = y;
         SDL_Color color = uintToColour(THEME_COLOR4_255);
         auto blit_line = [&](TTF_Font *face, int lh, const std::string &text) {
             if (!text.empty()) {
@@ -782,11 +776,7 @@ public:
             }
             y += lh;
         };
-        for (const auto &line : head)
-            blit_line(head_font, head_h, line);
-        y += head_h / 2;
-        int top = y;
-        int room = dst.y + dst.h - hint_h - top;
+        int room = dst.y + dst.h - hint_reserve - top;
         visible = room / body_h;
         if (visible < 1)
             visible = 1;
@@ -797,18 +787,15 @@ public:
             scroll = max_scroll;
         for (int i = 0; i < visible && scroll + i < (int)lines.size(); i++)
             blit_line(font.small, body_h, lines[scroll + i]);
-        std::string hint = "B back";
-        if (scroll > 0 || scroll < max_scroll)
-            hint += "  Up/Down";
-        int hint_y = dst.y + dst.h - hint_h;
-        if (hint_y < y)
-            hint_y = y;
-        SDL_Surface *hint_s = TTF_RenderUTF8_Blended(head_font, hint.c_str(), color);
-        if (hint_s) {
-            SDL_Rect at = {dst.x, hint_y, hint_s->w, hint_s->h};
-            SDL_BlitSurface(hint_s, nullptr, surface, &at);
-            SDL_FreeSurface(hint_s);
-        }
+        // Same pairs as the clock and battery screens. U/D and L1/R1 are
+        // text tokens in GFX_blitButton; B is the face-button icon.
+        char *scroll_hints[] = {
+            (char *)"U/D", (char *)"SCROLL",
+            (char *)"L1/R1", (char *)"PAGE",
+            NULL};
+        char *back_hints[] = {(char *)"B", (char *)"BACK", NULL};
+        GFX_blitButtonGroup(scroll_hints, 0, surface, 0);
+        GFX_blitButtonGroup(back_hints, 1, surface, 1);
     }
 
     InputReactionHint handleInput(int &dirty, int &quit) override
@@ -849,7 +836,7 @@ public:
             scroll = next;
             return NoOp;
         }
-        if (PAD_justPressed(BTN_B) || PAD_justPressed(BTN_A)) {
+        if (PAD_justPressed(BTN_B)) {
             quit = 1;
             dirty = 1;
             return NoOp;
@@ -858,9 +845,7 @@ public:
     }
 
 private:
-    std::string preamble;
     std::string body;
-    std::vector<std::string> head;
     std::vector<std::string> lines;
     int scroll = 0;
     int wrapped_w = -1;
@@ -872,8 +857,6 @@ InputReactionHint do_notes(AbstractMenuItem &item)
     auto *view = static_cast<ReleaseNotesView *>(item.getSubMenu());
     if (!view)
         return NoOp;
-    const std::string preamble =
-        "The update installs on reboot. Games, BIOS, and settings stay.";
     std::string shown;
     if (!g_rel.ok)
         shown = "Check for an update first.";
@@ -883,7 +866,7 @@ InputReactionHint do_notes(AbstractMenuItem &item)
         shown = "Release notes could not be retrieved.";
     else
         shown = g_rel.body;
-    view->setNotes(preamble, shown);
+    view->setNotes(shown);
     item.defer(true);
     return NoOp;
 }
