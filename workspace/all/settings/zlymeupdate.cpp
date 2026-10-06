@@ -56,6 +56,7 @@ struct ReleaseMeta {
     std::string sha_url;
     long sha_id = 0;
     std::string body;
+    std::string body_status;
     std::string match;
 };
 
@@ -388,6 +389,8 @@ ReleaseMeta parse_meta(const std::string &text)
             m.sha_id = strtol(v.c_str(), nullptr, 10);
         else if (k == "BODY_FILE")
             body_file = v;
+        else if (k == "BODY_STATUS")
+            m.body_status = v;
         else if (k == "MATCH")
             m.match = v;
     }
@@ -626,28 +629,262 @@ InputReactionHint do_check(AbstractMenuItem &item)
     return NoOp;
 }
 
+static std::string notes_markdown_line(std::string line)
+{
+    if (!line.empty() && line.back() == '\r')
+        line.pop_back();
+    if (!line.empty() && line[0] == '#') {
+        size_t i = 0;
+        while (i < line.size() && line[i] == '#')
+            i++;
+        if (i < line.size() && line[i] == ' ')
+            i++;
+        line.erase(0, i);
+    }
+    std::string out;
+    out.reserve(line.size());
+    for (size_t i = 0; i < line.size();) {
+        if (i + 1 < line.size() &&
+            (line.compare(i, 2, "**") == 0 || line.compare(i, 2, "__") == 0)) {
+            i += 2;
+            continue;
+        }
+        if (line[i] == '`') {
+            i++;
+            continue;
+        }
+        out.push_back(line[i]);
+        i++;
+    }
+    return out;
+}
+
+static void notes_append_wrapped(std::vector<std::string> &out, TTF_Font *face,
+    const std::string &text, int max_w)
+{
+    if (text.empty() || !face || max_w < 8) {
+        out.push_back(text);
+        return;
+    }
+    auto width_of = [&](const std::string &s) {
+        int w = 0;
+        TTF_SizeUTF8(face, s.c_str(), &w, nullptr);
+        return w;
+    };
+    std::string cur;
+    std::string word;
+    auto take_word = [&](std::string w) {
+        while (!w.empty()) {
+            if (cur.empty() && width_of(w) > max_w) {
+                std::string chunk;
+                size_t i = 0;
+                for (; i < w.size(); i++) {
+                    chunk.push_back(w[i]);
+                    if (width_of(chunk) > max_w && chunk.size() > 1) {
+                        chunk.pop_back();
+                        break;
+                    }
+                }
+                if (chunk.empty())
+                    return;
+                out.push_back(chunk);
+                w.erase(0, chunk.size());
+                continue;
+            }
+            std::string trial = cur.empty() ? w : cur + " " + w;
+            if (width_of(trial) <= max_w) {
+                cur = trial;
+                return;
+            }
+            if (!cur.empty())
+                out.push_back(cur);
+            cur.clear();
+        }
+    };
+    for (size_t i = 0; i <= text.size(); i++) {
+        if (i == text.size() || text[i] == ' ') {
+            take_word(word);
+            word.clear();
+        } else {
+            word.push_back(text[i]);
+        }
+    }
+    if (!cur.empty())
+        out.push_back(cur);
+}
+
+static void notes_split(std::vector<std::string> &out, TTF_Font *face,
+    const std::string &text, int max_w)
+{
+    size_t pos = 0;
+    while (pos <= text.size()) {
+        size_t nl = text.find('\n', pos);
+        std::string line = text.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+        notes_append_wrapped(out, face, notes_markdown_line(line), max_w);
+        if (nl == std::string::npos)
+            break;
+        pos = nl + 1;
+        if (pos == text.size())
+            break;
+    }
+}
+
+class ReleaseNotesView : public MenuList {
+public:
+    ReleaseNotesView()
+        : MenuList(MenuItemType::Custom, "Notes", {})
+    {
+    }
+
+    void setNotes(const std::string &preamble_in, const std::string &body_in)
+    {
+        preamble = preamble_in;
+        body = body_in;
+        scroll = 0;
+        wrapped_w = -1;
+        lines.clear();
+        head.clear();
+    }
+
+    void drawCustom(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rect &dstTitle) override
+    {
+        (void)dstTitle;
+        if (!surface || !font.small)
+            return;
+        TTF_Font *head_font = font.tiny ? font.tiny : font.small;
+        int max_w = dst.w - SCALE1(12);
+        if (max_w < 40)
+            max_w = dst.w > 0 ? dst.w : 40;
+        if (wrapped_w != max_w) {
+            head.clear();
+            lines.clear();
+            notes_split(head, head_font, preamble, max_w);
+            notes_split(lines, font.small, body, max_w);
+            wrapped_w = max_w;
+        }
+        int body_h = TTF_FontHeight(font.small);
+        int head_h = TTF_FontHeight(head_font);
+        if (body_h < 1)
+            body_h = 16;
+        if (head_h < 1)
+            head_h = body_h;
+        int hint_h = head_h;
+        int y = dst.y;
+        SDL_Color color = uintToColour(THEME_COLOR4_255);
+        auto blit_line = [&](TTF_Font *face, int lh, const std::string &text) {
+            if (!text.empty()) {
+                SDL_Surface *rendered = TTF_RenderUTF8_Blended(face, text.c_str(), color);
+                if (rendered) {
+                    SDL_Rect at = {dst.x, y, rendered->w, rendered->h};
+                    SDL_BlitSurface(rendered, nullptr, surface, &at);
+                    SDL_FreeSurface(rendered);
+                }
+            }
+            y += lh;
+        };
+        for (const auto &line : head)
+            blit_line(head_font, head_h, line);
+        y += head_h / 2;
+        int top = y;
+        int room = dst.y + dst.h - hint_h - top;
+        visible = room / body_h;
+        if (visible < 1)
+            visible = 1;
+        int max_scroll = (int)lines.size() - visible;
+        if (max_scroll < 0)
+            max_scroll = 0;
+        if (scroll > max_scroll)
+            scroll = max_scroll;
+        for (int i = 0; i < visible && scroll + i < (int)lines.size(); i++)
+            blit_line(font.small, body_h, lines[scroll + i]);
+        std::string hint = "B back";
+        if (scroll > 0 || scroll < max_scroll)
+            hint += "  Up/Down";
+        int hint_y = dst.y + dst.h - hint_h;
+        if (hint_y < y)
+            hint_y = y;
+        SDL_Surface *hint_s = TTF_RenderUTF8_Blended(head_font, hint.c_str(), color);
+        if (hint_s) {
+            SDL_Rect at = {dst.x, hint_y, hint_s->w, hint_s->h};
+            SDL_BlitSurface(hint_s, nullptr, surface, &at);
+            SDL_FreeSurface(hint_s);
+        }
+    }
+
+    InputReactionHint handleInput(int &dirty, int &quit) override
+    {
+        int max_scroll = (int)lines.size() - visible;
+        if (max_scroll < 0)
+            max_scroll = 0;
+        int page = visible > 1 ? visible - 1 : 1;
+        if (PAD_justRepeated(BTN_UP)) {
+            if (scroll > 0) {
+                scroll--;
+                dirty = 1;
+            }
+            return NoOp;
+        }
+        if (PAD_justRepeated(BTN_DOWN)) {
+            if (scroll < max_scroll) {
+                scroll++;
+                dirty = 1;
+            }
+            return NoOp;
+        }
+        if (PAD_justRepeated(BTN_L1)) {
+            int next = scroll - page;
+            if (next < 0)
+                next = 0;
+            if (next != scroll)
+                dirty = 1;
+            scroll = next;
+            return NoOp;
+        }
+        if (PAD_justRepeated(BTN_R1)) {
+            int next = scroll + page;
+            if (next > max_scroll)
+                next = max_scroll;
+            if (next != scroll)
+                dirty = 1;
+            scroll = next;
+            return NoOp;
+        }
+        if (PAD_justPressed(BTN_B) || PAD_justPressed(BTN_A)) {
+            quit = 1;
+            dirty = 1;
+            return NoOp;
+        }
+        return NoOp;
+    }
+
+private:
+    std::string preamble;
+    std::string body;
+    std::vector<std::string> head;
+    std::vector<std::string> lines;
+    int scroll = 0;
+    int wrapped_w = -1;
+    int visible = 8;
+};
+
 InputReactionHint do_notes(AbstractMenuItem &item)
 {
-    (void)item;
-    std::string msg = "OTA is kernel + squashfs.\nGames, BIOS, and Settings stay on ZLYME.\nBackup first from System if you want.\n\n";
-    if (!g_rel.ok) {
-        msg += "Check for an update first.";
-    } else if (trim(g_rel.body).empty()) {
-        msg += "No notes in this release.";
-    } else {
-        std::string body = g_rel.body;
-        int lines = 0;
-        std::string shown;
-        for (size_t i = 0; i < body.size() && lines < 10; i++) {
-            shown.push_back(body[i]);
-            if (body[i] == '\n')
-                lines++;
-        }
-        if (shown.size() < body.size())
-            shown += "\n...";
-        msg += shown;
-    }
-    overlay_ok(msg);
+    auto *view = static_cast<ReleaseNotesView *>(item.getSubMenu());
+    if (!view)
+        return NoOp;
+    const std::string preamble =
+        "The update installs on reboot. Games, BIOS, and settings stay.";
+    std::string shown;
+    if (!g_rel.ok)
+        shown = "Check for an update first.";
+    else if (g_rel.body_status == "empty")
+        shown = "No notes in this release.";
+    else if (g_rel.body_status == "unavailable" || trim(g_rel.body).empty())
+        shown = "Release notes could not be retrieved.";
+    else
+        shown = g_rel.body;
+    view->setNotes(preamble, shown);
+    item.defer(true);
     return NoOp;
 }
 
@@ -842,7 +1079,7 @@ MenuList *Zlyme_buildUpdateMenu()
         new MenuItem{ListItemType::Button, "Download and queue",
             "Hash-check, then queue reboot.", do_download},
         new MenuItem{ListItemType::Button, "Notes",
-            "Release notes. Games stay.", do_notes},
+            "Release notes. Games stay.", do_notes, new ReleaseNotesView()},
     };
     return new MenuList(MenuItemType::Fixed, "Update", items);
 }
