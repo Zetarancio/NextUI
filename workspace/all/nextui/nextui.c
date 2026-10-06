@@ -4178,11 +4178,14 @@ int main (int argc, char *argv[]) {
 				if(is_scrolling && pillanimdone && currentAnimQueueSize < 1) {
 					int ow = GFX_blitHardwareGroup(screen, show_setting);
 					Entry* entry = top->entries->items[top->selected];
-					trimSortingMeta(&entry->name);
+					/* Display strips 000) prefixes. Do not move the stored
+					   pointer or the next sort loses the ordering key. */
 					char* entry_text = entry->name;
+					trimSortingMeta(&entry_text);
 					if (entry->unique) {
-						trimSortingMeta(&entry->unique);
-						entry_text = entry->unique;
+						char* unique_text = entry->unique;
+						trimSortingMeta(&unique_text);
+						entry_text = unique_text;
 					}
 
 					int available_width = (had_thumb ? ox + SCALE1(BUTTON_MARGIN) : screen->w - SCALE1(BUTTON_MARGIN)) - SCALE1(PADDING * 2);
