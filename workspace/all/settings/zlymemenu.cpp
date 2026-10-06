@@ -1,4 +1,5 @@
 #include "zlymemenu.hpp"
+#include "keyboardprompt.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -8,6 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -174,11 +176,233 @@ static InputReactionHint Zlyme_restoreBackup(AbstractMenuItem &item)
 	return NoOp;
 }
 
+struct ProxyState {
+	bool enabled = false;
+	std::string protocol = "http";
+	std::string host;
+	std::string port;
+};
+
+static int proxy_run(const std::vector<std::string> &args, std::string *out_text, std::string *err_text)
+{
+	int outp[2] = {-1, -1};
+	int errp[2] = {-1, -1};
+	if (pipe(outp) != 0)
+		return -1;
+	if (err_text && pipe(errp) != 0) {
+		close(outp[0]);
+		close(outp[1]);
+		return -1;
+	}
+	pid_t pid = fork();
+	if (pid < 0) {
+		close(outp[0]);
+		close(outp[1]);
+		if (err_text) {
+			close(errp[0]);
+			close(errp[1]);
+		}
+		return -1;
+	}
+	if (pid == 0) {
+		dup2(outp[1], STDOUT_FILENO);
+		if (err_text)
+			dup2(errp[1], STDERR_FILENO);
+		else
+			dup2(outp[1], STDERR_FILENO);
+		close(outp[0]);
+		close(outp[1]);
+		if (err_text) {
+			close(errp[0]);
+			close(errp[1]);
+		}
+		std::vector<char *> argv;
+		argv.push_back(const_cast<char *>("zlyme-proxy"));
+		for (const auto &arg : args)
+			argv.push_back(const_cast<char *>(arg.c_str()));
+		argv.push_back(nullptr);
+		execvp("zlyme-proxy", argv.data());
+		_exit(127);
+	}
+	close(outp[1]);
+	if (err_text)
+		close(errp[1]);
+	auto read_fd = [](int fd) {
+		std::string text;
+		char buf[256];
+		ssize_t n;
+		while ((n = ::read(fd, buf, sizeof(buf))) > 0)
+			text.append(buf, static_cast<size_t>(n));
+		close(fd);
+		return text;
+	};
+	if (out_text)
+		*out_text = read_fd(outp[0]);
+	else
+		close(outp[0]);
+	if (err_text)
+		*err_text = read_fd(errp[0]);
+	int status = 0;
+	if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status))
+		return -1;
+	return WEXITSTATUS(status);
+}
+
+static ProxyState proxy_load()
+{
+	ProxyState state;
+	std::string out;
+	if (proxy_run({"get"}, &out, nullptr) != 0)
+		return state;
+	std::istringstream in(out);
+	std::string line;
+	while (std::getline(in, line)) {
+		if (!line.empty() && line.back() == '\r')
+			line.pop_back();
+		size_t eq = line.find('=');
+		if (eq == std::string::npos)
+			continue;
+		std::string key = line.substr(0, eq);
+		std::string value = line.substr(eq + 1);
+		if (key == "enabled")
+			state.enabled = (value == "1");
+		else if (key == "protocol")
+			state.protocol = (value == "socks5") ? "socks5" : "http";
+		else if (key == "host")
+			state.host = value;
+		else if (key == "port")
+			state.port = value;
+	}
+	return state;
+}
+
+static bool proxy_store(const ProxyState &state, std::string *err)
+{
+	std::string message;
+	std::vector<std::string> args;
+	args.push_back("set");
+	args.push_back(state.enabled ? "1" : "0");
+	args.push_back(state.protocol);
+	args.push_back(state.host);
+	args.push_back(state.port);
+	int rc = proxy_run(args, nullptr, &message);
+	while (!message.empty() && (message.back() == '\n' || message.back() == '\r'))
+		message.pop_back();
+	if (err)
+		*err = message;
+	return rc == 0;
+}
+
+static void Zlyme_appendProxyItem(std::vector<AbstractMenuItem *> &items)
+{
+	const std::vector<std::any> on_off_v = {false, true};
+	const std::vector<std::string> on_off = {"Off", "On"};
+	const std::vector<std::any> proto_v = {std::string("http"), std::string("socks5")};
+	const std::vector<std::string> proto_l = {"HTTP", "SOCKS5"};
+
+	auto *host_prompt = new KeyboardPrompt("Proxy host", [](AbstractMenuItem &item) -> InputReactionHint {
+		ProxyState state = proxy_load();
+		state.host = item.getName();
+		std::string err;
+		if (!proxy_store(state, &err)) {
+			MenuList::showOverlay(err.empty() ? "Could not save host." : err,
+				OverlayDismissMode::DismissOnA);
+			return NoOp;
+		}
+		return Exit;
+	});
+	auto *port_prompt = new KeyboardPrompt("Proxy port", [](AbstractMenuItem &item) -> InputReactionHint {
+		ProxyState state = proxy_load();
+		state.port = item.getName();
+		std::string err;
+		if (!proxy_store(state, &err)) {
+			MenuList::showOverlay(err.empty() ? "Could not save port." : err,
+				OverlayDismissMode::DismissOnA);
+			return NoOp;
+		}
+		return Exit;
+	});
+
+	std::vector<AbstractMenuItem *> proxy_items = {
+		new MenuItem{ListItemType::Generic, "Proxy",
+			"Off leaves applications direct.",
+			on_off_v, on_off,
+			[]() -> std::any { return proxy_load().enabled; },
+			[](const std::any &value) {
+				ProxyState state = proxy_load();
+				state.enabled = std::any_cast<bool>(value);
+				std::string err;
+				if (!proxy_store(state, &err))
+					MenuList::showOverlay(err.empty() ? "Could not save proxy." : err,
+						OverlayDismissMode::DismissOnA);
+			},
+			[]() {
+				ProxyState state = proxy_load();
+				state.enabled = false;
+				proxy_store(state, nullptr);
+			}},
+		new MenuItem{ListItemType::Generic, "Protocol",
+			"SOCKS5 resolves names through the proxy.",
+			proto_v, proto_l,
+			[]() -> std::any { return proxy_load().protocol; },
+			[](const std::any &value) {
+				ProxyState state = proxy_load();
+				state.protocol = std::any_cast<std::string>(value);
+				std::string err;
+				if (!proxy_store(state, &err))
+					MenuList::showOverlay(err.empty() ? "Could not save protocol." : err,
+						OverlayDismissMode::DismissOnA);
+			},
+			[]() {
+				ProxyState state = proxy_load();
+				state.protocol = "http";
+				proxy_store(state, nullptr);
+			}},
+		new TextInputMenuItem{"Host", "Hostname or address. No username.",
+			[]() -> std::any {
+				std::string host = proxy_load().host;
+				return host.empty() ? std::string("(not set)") : host;
+			},
+			[host_prompt](AbstractMenuItem &item) -> InputReactionHint {
+				host_prompt->setInitialText(proxy_load().host);
+				item.defer(true);
+				return NoOp;
+			}, host_prompt},
+		new TextInputMenuItem{"Port", "1-65535.",
+			[]() -> std::any {
+				std::string port = proxy_load().port;
+				return port.empty() ? std::string("(not set)") : port;
+			},
+			[port_prompt](AbstractMenuItem &item) -> InputReactionHint {
+				port_prompt->setInitialText(proxy_load().port);
+				item.defer(true);
+				return NoOp;
+			}, port_prompt},
+		new MenuItem{ListItemType::Button, "Test proxy",
+			"A short GitHub HTTPS request.",
+			[](AbstractMenuItem &) -> InputReactionHint {
+				std::string out;
+				std::string err;
+				proxy_run({"test"}, &out, &err);
+				std::string msg = trim(out.empty() ? err : out);
+				if (msg.empty())
+					msg = "Proxy test failed.";
+				MenuList::showOverlay(msg, OverlayDismissMode::DismissOnA);
+				return NoOp;
+			}},
+	};
+	items.push_back(new MenuItem{ListItemType::Generic, "Proxy",
+		"HTTP or SOCKS5 for applications. Not a VPN.",
+		{}, {}, nullptr, nullptr, DeferToSubmenu,
+		new MenuList(MenuItemType::Fixed, "Proxy", std::move(proxy_items))});
+}
+
 void Zlyme_appendNetworkItems(std::vector<AbstractMenuItem *> &items)
 {
 	const std::vector<std::any> on_off_v = {false, true};
 	const std::vector<std::string> on_off = {"Off", "On"};
 
+	Zlyme_appendProxyItem(items);
 	items.push_back(new MenuItem{ListItemType::Generic, "SSH",
 		"OpenSSH with SFTP. Applies immediately.",
 		on_off_v, on_off,

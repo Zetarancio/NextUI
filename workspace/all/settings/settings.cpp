@@ -1089,7 +1089,7 @@ int main(int argc, char *argv[])
                 new MenuItem{ListItemType::Generic, "Bluetooth", "Pair HID controllers and headsets", {}, {}, nullptr, nullptr, DeferToSubmenu, new Bluetooth::Menu(appQuit, ctx.dirty)},
             };
             Zlyme_appendNetworkItems(networkItems);
-            mainItems.push_back(new MenuItem{ListItemType::Generic, "Network", "WiFi, Bluetooth, SSH, Samba, Syncthing", {}, {}, nullptr, nullptr, DeferToSubmenu,
+            mainItems.push_back(new MenuItem{ListItemType::Generic, "Network", "WiFi, Bluetooth, proxy, SSH, Samba, Syncthing", {}, {}, nullptr, nullptr, DeferToSubmenu,
                 new MenuList(MenuItemType::Fixed, "Network", std::move(networkItems))});
         } else if(deviceInfo.hasBluetooth())
             mainItems.push_back(new MenuItem{ListItemType::Generic, "Bluetooth", "Pair and connect HID", {}, {}, nullptr, nullptr, DeferToSubmenu, new Bluetooth::Menu(appQuit, ctx.dirty)});
