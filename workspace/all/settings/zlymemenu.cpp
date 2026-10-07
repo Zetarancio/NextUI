@@ -668,11 +668,14 @@ static InputReactionHint recovery_maskrom_now(AbstractMenuItem &)
 	char *argv[] = {arg0, nullptr};
 	int code = 0;
 	std::string text = run_argv(argv, &code);
-	/* A successful restart does not return, so there is no success screen. */
-	std::string msg = "Could not request a MASKROM restart.";
-	if (!text.empty())
-		msg += "\n" + text;
-	MenuList::showOverlay(msg, OverlayDismissMode::DismissOnA);
+	(void)code;
+	/* A successful restart does not return, so there is no success screen.
+	 * The helper's own sentence is the failure: a write error, or a
+	 * queued request whose ordinary reboot did not start.
+	 */
+	if (text.empty())
+		text = "Could not request a MASKROM restart.";
+	MenuList::showOverlay(text, OverlayDismissMode::DismissOnA);
 	return NoOp;
 }
 
