@@ -541,16 +541,102 @@ static InputReactionHint recovery_cancel(AbstractMenuItem &)
 	return Exit;
 }
 
-static InputReactionHint recovery_status(AbstractMenuItem &)
+static std::string kv_last(const std::string &text, const char *key)
+{
+	const std::string prefix = std::string(key) + "=";
+	std::istringstream in(text);
+	std::string line;
+	std::string val;
+	while (std::getline(in, line)) {
+		if (!line.empty() && line.back() == '\r')
+			line.pop_back();
+		if (line.compare(0, prefix.size(), prefix) == 0)
+			val = line.substr(prefix.size());
+	}
+	return val;
+}
+
+static std::vector<std::string> wrap_words(const std::string &msg, size_t width)
+{
+	std::vector<std::string> lines;
+	std::string cur;
+	std::istringstream in(msg);
+	std::string word;
+	while (in >> word) {
+		if (word.size() > width) {
+			if (!cur.empty()) {
+				lines.push_back(cur);
+				cur.clear();
+			}
+			for (size_t i = 0; i < word.size(); i += width)
+				lines.push_back(word.substr(i, width));
+			continue;
+		}
+		if (cur.empty())
+			cur = word;
+		else if (cur.size() + 1 + word.size() <= width)
+			cur += " " + word;
+		else {
+			lines.push_back(cur);
+			cur = word;
+		}
+	}
+	if (!cur.empty())
+		lines.push_back(cur);
+	if (lines.empty())
+		lines.push_back("Preloader status could not be read.");
+	return lines;
+}
+
+static MenuList *preloader_status_page(const std::string &text, int code)
+{
+	std::vector<AbstractMenuItem *> rows;
+	std::string error = kv_last(text, "error");
+	if (code != 0 || !error.empty()) {
+		if (error.empty()) {
+			std::string first = text;
+			auto nl = first.find('\n');
+			if (nl != std::string::npos)
+				first.resize(nl);
+			error = first.empty() ? "Preloader status could not be read." : first;
+		}
+		for (const auto &line : wrap_words(error, 28)) {
+			rows.push_back(new StaticMenuItem{ListItemType::Generic, line,
+				"Status could not be read.",
+				[]() -> std::any { return std::string(""); }});
+		}
+	} else {
+		std::string pre = kv_last(text, "preloader");
+		std::string bak = kv_last(text, "backup");
+		std::string bat = kv_last(text, "battery");
+		std::string chg = kv_last(text, "charger");
+		std::string pre_l = pre == "valid" ? "Valid" : "Missing";
+		std::string bak_l = bak == "available" ? "Available" : "Unavailable";
+		std::string bat_l = bat.empty() ? "Unknown" : bat + "%";
+		if (chg == "charging")
+			bat_l += " / charging";
+		rows.push_back(new StaticMenuItem{ListItemType::Generic, "Preloader",
+			"From zlyme-preloader.",
+			[pre_l]() -> std::any { return pre_l; }});
+		rows.push_back(new StaticMenuItem{ListItemType::Generic, "Original backup",
+			"From zlyme-preloader.",
+			[bak_l]() -> std::any { return bak_l; }});
+		rows.push_back(new StaticMenuItem{ListItemType::Generic, "Battery",
+			"From zlyme-preloader.",
+			[bat_l]() -> std::any { return bat_l; }});
+	}
+	return new MenuList(MenuItemType::Fixed, "Preloader status", rows);
+}
+
+static InputReactionHint recovery_status(AbstractMenuItem &item)
 {
 	char arg0[] = "/usr/sbin/zlyme-preloader";
-	char arg1[] = "status";
+	char arg1[] = "status-machine";
 	char *argv[] = {arg0, arg1, nullptr};
 	int code = 0;
 	std::string text = run_argv(argv, &code);
-	if (text.empty())
-		text = "Preloader status could not be read.";
-	MenuList::showOverlay(text, OverlayDismissMode::DismissOnA);
+	item.setSubMenu(preloader_status_page(text, code));
+	item.defer(true);
 	return NoOp;
 }
 
@@ -721,7 +807,7 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 		"A later reset or power cycle can boot normally.";
 	std::vector<AbstractMenuItem *> recovery;
 	recovery.push_back(new MenuItem{ListItemType::Button, "Preloader status",
-		"Shows whether a valid original backup is available.",
+		"Partition, backup, and battery.",
 		recovery_status});
 	recovery.push_back(new MenuItem{ListItemType::Button, "Restore stock preloader",
 		restore_desc, DeferToSubmenu,

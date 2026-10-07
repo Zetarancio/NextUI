@@ -202,6 +202,7 @@ public:
     bool isDeferred() const { return deferred; }
     void defer(bool on);
     MenuList *getSubMenu() { return submenu; }
+    void setSubMenu(MenuList *next);
 };
 
 // A simple menu item visualizing a fixed label and value that is read-only.

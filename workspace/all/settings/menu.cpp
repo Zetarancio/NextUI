@@ -35,6 +35,14 @@ void AbstractMenuItem::defer(bool on)
         submenu->onShow();
 }
 
+void AbstractMenuItem::setSubMenu(MenuList *next)
+{
+    if (submenu == next)
+        return;
+    delete submenu;
+    submenu = next;
+}
+
 MenuItem::MenuItem(ListItemType type, const std::string &name, const std::string &desc,
                    const std::vector<std::any> &values, const std::vector<std::string> &labels,
                    ValueGetCallback on_get, ValueSetCallback on_set, ValueResetCallback on_reset, 
