@@ -611,7 +611,7 @@ static MenuList *preloader_status_page(const std::string &text, int code)
 		std::string bat = kv_last(text, "battery");
 		std::string chg = kv_last(text, "charger");
 		std::string pre_l = pre == "valid" ? "Valid" : "Missing";
-		std::string bak_l = bak == "available" ? "Available" : "Unavailable";
+		std::string bak_l = bak == "available" ? "Available" : "Missing";
 		std::string bat_l = bat.empty() ? "Unknown" : bat + "%";
 		if (chg == "charging")
 			bat_l += " / charging";
@@ -621,6 +621,13 @@ static MenuList *preloader_status_page(const std::string &text, int code)
 		rows.push_back(new StaticMenuItem{ListItemType::Generic, "Original backup",
 			"From zlyme-preloader.",
 			[bak_l]() -> std::any { return bak_l; }});
+		if (bak != "available") {
+			std::string fb = kv_last(text, "fallback");
+			std::string fb_l = fb == "compatible" ? "Compatible" : "Not compatible";
+			rows.push_back(new StaticMenuItem{ListItemType::Generic, "Fallback",
+				"From zlyme-preloader.",
+				[fb_l]() -> std::any { return fb_l; }});
+		}
 		rows.push_back(new StaticMenuItem{ListItemType::Generic, "Battery",
 			"From zlyme-preloader.",
 			[bat_l]() -> std::any { return bat_l; }});
