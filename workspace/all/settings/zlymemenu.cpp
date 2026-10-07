@@ -496,6 +496,122 @@ static InputReactionHint Zlyme_factoryReset(AbstractMenuItem &item)
 	return NoOp;
 }
 
+static std::string run_argv(char *const argv[], int *code)
+{
+	int fds[2];
+	if (pipe(fds) != 0) {
+		*code = -1;
+		return "could not start the command";
+	}
+	pid_t pid = fork();
+	if (pid < 0) {
+		close(fds[0]);
+		close(fds[1]);
+		*code = -1;
+		return "could not start the command";
+	}
+	if (pid == 0) {
+		close(fds[0]);
+		if (dup2(fds[1], 1) < 0 || dup2(fds[1], 2) < 0)
+			_exit(127);
+		if (fds[1] > 2)
+			close(fds[1]);
+		execv(argv[0], argv);
+		_exit(127);
+	}
+	close(fds[1]);
+	std::string out;
+	char buf[256];
+	ssize_t n;
+	while ((n = read(fds[0], buf, sizeof(buf))) > 0) {
+		if (out.size() < 1200)
+			out.append(buf, buf + n);
+	}
+	close(fds[0]);
+	int status = 0;
+	if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status))
+		*code = -1;
+	else
+		*code = WEXITSTATUS(status);
+	return trim(out);
+}
+
+static InputReactionHint recovery_cancel(AbstractMenuItem &)
+{
+	return Exit;
+}
+
+static InputReactionHint recovery_status(AbstractMenuItem &)
+{
+	char arg0[] = "/usr/sbin/zlyme-preloader";
+	char arg1[] = "status";
+	char *argv[] = {arg0, arg1, nullptr};
+	int code = 0;
+	std::string text = run_argv(argv, &code);
+	if (text.empty())
+		text = "Preloader status could not be read.";
+	MenuList::showOverlay(text, OverlayDismissMode::DismissOnA);
+	return NoOp;
+}
+
+static InputReactionHint recovery_restore_now(AbstractMenuItem &)
+{
+	char arg0[] = "/usr/sbin/zlyme-preloader";
+	char arg1[] = "restore";
+	char *argv[] = {arg0, arg1, nullptr};
+	int code = 0;
+	std::string text = run_argv(argv, &code);
+	std::string msg;
+	if (code == 0)
+		msg = "Restore finished. The readback hash matched the backup.";
+	else if (text.find("previous preloader restored and verified") != std::string::npos)
+		msg = "Restore failed; previous preloader restored and verified.";
+	else if (text.find("CRITICAL:") != std::string::npos)
+		msg = "CRITICAL: restore failed and rollback could not be verified.";
+	else if (!text.empty())
+		msg = text;
+	else
+		msg = "Restore failed.";
+	MenuList::showOverlay(msg, OverlayDismissMode::DismissOnA);
+	return NoOp;
+}
+
+static InputReactionHint recovery_maskrom_now(AbstractMenuItem &)
+{
+	char arg0[] = "/usr/sbin/zlyme-maskrom";
+	char *argv[] = {arg0, nullptr};
+	int code = 0;
+	std::string text = run_argv(argv, &code);
+	/* A successful restart does not return, so there is no success screen. */
+	std::string msg = "Could not request a MASKROM restart.";
+	if (!text.empty())
+		msg += "\n" + text;
+	MenuList::showOverlay(msg, OverlayDismissMode::DismissOnA);
+	return NoOp;
+}
+
+static MenuList *recovery_final(const char *title, const char *action,
+	MenuListCallback go)
+{
+	std::vector<AbstractMenuItem *> rows;
+	rows.push_back(new MenuItem{ListItemType::Button, "Cancel",
+		"Leave this confirmation.", recovery_cancel});
+	rows.push_back(new MenuItem{ListItemType::Button, action,
+		"Final confirmation. Cancel is selected.", go});
+	return new MenuList(MenuItemType::Fixed, title, rows);
+}
+
+static MenuList *recovery_stage(const char *title, const std::string &desc,
+	MenuList *final_page)
+{
+	std::vector<AbstractMenuItem *> rows;
+	rows.push_back(new MenuItem{ListItemType::Button, "Cancel",
+		"Leave this confirmation.", recovery_cancel});
+	rows.push_back(new MenuItem{ListItemType::Button, "Continue", desc,
+		DeferToSubmenu, final_page});
+	return new MenuList(MenuItemType::Fixed, title, rows);
+}
+
 void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 {
 	std::vector<AbstractMenuItem *> advanced;
@@ -594,6 +710,33 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 			ctl_set("logs", "off");
 			system("zlyme-ctl apply-logs");
 		}});
+	const char *restore_desc =
+		"Writes the original backup to internal NAND.\n"
+		"The current preloader is saved first.\n"
+		"A failed write is not success.";
+	const char *maskrom_desc =
+		"Connect the bottom USB-C to the PC before continuing.\n"
+		"This restarts into Rockchip USB recovery.\n"
+		"It does not erase the preloader.\n"
+		"A later reset or power cycle can boot normally.";
+	std::vector<AbstractMenuItem *> recovery;
+	recovery.push_back(new MenuItem{ListItemType::Button, "Preloader status",
+		"Shows whether a valid original backup is available.",
+		recovery_status});
+	recovery.push_back(new MenuItem{ListItemType::Button, "Restore stock preloader",
+		restore_desc, DeferToSubmenu,
+		recovery_stage("Restore stock preloader", restore_desc,
+			recovery_final("Restore stock preloader",
+				"RESTORE STOCK PRELOADER", recovery_restore_now))});
+	recovery.push_back(new MenuItem{ListItemType::Button, "Reboot to MASKROM",
+		maskrom_desc, DeferToSubmenu,
+		recovery_stage("Reboot to MASKROM", maskrom_desc,
+			recovery_final("Reboot to MASKROM",
+				"REBOOT TO MASKROM", recovery_maskrom_now))});
+	advanced.push_back(new MenuItem{ListItemType::Generic, "Recovery",
+		"Preloader status, stock restore, and reboot to MASKROM.",
+		{}, {}, nullptr, nullptr, DeferToSubmenu,
+		new MenuList(MenuItemType::Fixed, "Recovery", recovery)});
 	advanced.push_back(new MenuItem{ListItemType::Button, "Reset Settings",
 		"Return product settings to defaults.\nGames, saves, Wi-Fi and paired devices stay.",
 		Zlyme_resetSettings});
@@ -601,7 +744,7 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 		"Restore settings and stock Tools/Emus.\nGames, saves, Wi-Fi and personal content stay.",
 		Zlyme_factoryReset});
 	items.push_back(new MenuItem{ListItemType::Generic, "Advanced",
-		"GPU, power features, logs, and reset.",
+		"GPU, power features, logs, reset, and recovery.",
 		{}, {}, nullptr, nullptr, DeferToSubmenu,
 		new MenuList(MenuItemType::Fixed, "Advanced", advanced)});
 }
