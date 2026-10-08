@@ -556,55 +556,16 @@ static std::string kv_last(const std::string &text, const char *key)
 	return val;
 }
 
-static std::vector<std::string> wrap_words(const std::string &msg, size_t width)
-{
-	std::vector<std::string> lines;
-	std::string cur;
-	std::istringstream in(msg);
-	std::string word;
-	while (in >> word) {
-		if (word.size() > width) {
-			if (!cur.empty()) {
-				lines.push_back(cur);
-				cur.clear();
-			}
-			for (size_t i = 0; i < word.size(); i += width)
-				lines.push_back(word.substr(i, width));
-			continue;
-		}
-		if (cur.empty())
-			cur = word;
-		else if (cur.size() + 1 + word.size() <= width)
-			cur += " " + word;
-		else {
-			lines.push_back(cur);
-			cur = word;
-		}
-	}
-	if (!cur.empty())
-		lines.push_back(cur);
-	if (lines.empty())
-		lines.push_back("Preloader status could not be read.");
-	return lines;
-}
-
 static MenuList *preloader_status_page(const std::string &text, int code)
 {
 	std::vector<AbstractMenuItem *> rows;
 	std::string error = kv_last(text, "error");
-	if (code != 0 || !error.empty()) {
-		if (error.empty()) {
-			std::string first = text;
-			auto nl = first.find('\n');
-			if (nl != std::string::npos)
-				first.resize(nl);
-			error = first.empty() ? "Preloader status could not be read." : first;
-		}
-		for (const auto &line : wrap_words(error, 28)) {
-			rows.push_back(new StaticMenuItem{ListItemType::Generic, line,
-				"Status could not be read.",
-				[]() -> std::any { return std::string(""); }});
-		}
+	// An empty value string makes SDL_ttf return NULL and the page exits.
+	// A failed or empty backend still opens a normal fixed page.
+	if (code != 0 || !error.empty() || text.empty()) {
+		rows.push_back(new StaticMenuItem{ListItemType::Generic, "Preloader status",
+			"The recovery backend did not return a status.",
+			[]() -> std::any { return std::string("Could not be read."); }});
 	} else {
 		std::string mode = kv_last(text, "mode");
 		std::string rec = kv_last(text, "recovery");
@@ -713,7 +674,7 @@ static InputReactionHint recovery_arm_now(AbstractMenuItem &)
 	text = run_argv(aargv, &code);
 	std::string msg;
 	if (code == 0)
-		msg = "Recovery armed. Keep the right Zlyme card inserted to boot Zlyme. To enter MASKROM, shut down, remove the right card, then power on. Use Disarm recovery to restore normal boot.";
+		msg = "Recovery armed. Keep a bootable card in the right slot for normal boot. To enter MASKROM, shut down, remove the right card, then power on.";
 	else if (text.find("source preloader restored and verified") != std::string::npos)
 		msg = "Arm failed. The previous preloader was restored and verified.";
 	else if (text.find("CRITICAL:") != std::string::npos)
@@ -870,17 +831,15 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 		}});
 	const char *restore_desc =
 		"Restores the original Miyoo preloader.\n"
-		"This is not how you leave MASKROM recovery.\n"
-		"A failed write is not success.";
+		"This is not how you leave MASKROM recovery.";
 	const char *arm_desc =
-		"Right-slot Zlyme still boots.\n"
-		"Without a bootable right card,\n"
-		"startup enters MASKROM.";
+		"A bootable card in the right slot still boots.\n"
+		"Without one, startup enters MASKROM.";
 	const char *arm_warn =
-		"Installs a recovery preloader in NAND.\n"
-		"A bootable Zlyme card in the RIGHT slot still boots Zlyme.\n"
-		"Without that card, startup enters MASKROM.\n"
-		"Stock internal boot stays off until disarm.";
+		"This installs a recovery preloader in internal NAND.\n"
+		"A bootable card in the RIGHT slot still boots normally.\n"
+		"Without a bootable right-slot card, startup enters Rockchip MASKROM recovery.\n"
+		"Internal stock boot stays disabled until recovery is disarmed.";
 	const char *disarm_desc =
 		"Restores the exact pre-recovery image.\n"
 		"This is not a stock restore.";
