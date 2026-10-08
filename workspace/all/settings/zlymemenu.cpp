@@ -606,28 +606,43 @@ static MenuList *preloader_status_page(const std::string &text, int code)
 				[]() -> std::any { return std::string(""); }});
 		}
 	} else {
-		std::string pre = kv_last(text, "preloader");
-		std::string bak = kv_last(text, "backup");
+		std::string mode = kv_last(text, "mode");
+		std::string rec = kv_last(text, "recovery");
+		std::string src = kv_last(text, "source_backup");
+		std::string stock = kv_last(text, "stock_restore");
 		std::string bat = kv_last(text, "battery");
 		std::string chg = kv_last(text, "charger");
-		std::string pre_l = pre == "valid" ? "Valid" : "Missing";
-		std::string bak_l = bak == "available" ? "Available" : "Missing";
 		std::string bat_l = bat.empty() ? "Unknown" : bat + "%";
 		if (chg == "charging")
 			bat_l += " / charging";
+		std::string pre_l = "Unknown";
+		if (mode == "normal")
+			pre_l = "Normal";
+		else if (mode == "recovery")
+			pre_l = "Recovery armed";
+		std::string rec_l = "Unknown";
+		if (rec == "ready")
+			rec_l = "Ready";
+		else if (rec == "armed")
+			rec_l = "Armed";
+		else if (rec == "not-prepared")
+			rec_l = "Not prepared";
+		else if (rec == "invalid")
+			rec_l = "Invalid";
+		std::string src_l = src == "available" ? "Available" : "Missing";
+		std::string stock_l = stock == "available" ? "Available" : "Unavailable";
 		rows.push_back(new StaticMenuItem{ListItemType::Generic, "Preloader",
-			"From zlyme-preloader.",
+			"Internal boot image.",
 			[pre_l]() -> std::any { return pre_l; }});
-		rows.push_back(new StaticMenuItem{ListItemType::Generic, "Original backup",
-			"From zlyme-preloader.",
-			[bak_l]() -> std::any { return bak_l; }});
-		if (bak != "available") {
-			std::string fb = kv_last(text, "fallback");
-			std::string fb_l = fb == "compatible" ? "Compatible" : "Not compatible";
-			rows.push_back(new StaticMenuItem{ListItemType::Generic, "Fallback",
-				"From zlyme-preloader.",
-				[fb_l]() -> std::any { return fb_l; }});
-		}
+		rows.push_back(new StaticMenuItem{ListItemType::Generic, "Recovery",
+			"MASKROM recovery state.",
+			[rec_l]() -> std::any { return rec_l; }});
+		rows.push_back(new StaticMenuItem{ListItemType::Generic, "Source backup",
+			"Saved pre-recovery image.",
+			[src_l]() -> std::any { return src_l; }});
+		rows.push_back(new StaticMenuItem{ListItemType::Generic, "Stock restore",
+			"Original Miyoo preloader.",
+			[stock_l]() -> std::any { return stock_l; }});
 		rows.push_back(new StaticMenuItem{ListItemType::Generic, "Battery",
 			"From zlyme-preloader.",
 			[bat_l]() -> std::any { return bat_l; }});
@@ -669,20 +684,67 @@ static InputReactionHint recovery_restore_now(AbstractMenuItem &)
 	return NoOp;
 }
 
-static InputReactionHint recovery_maskrom_now(AbstractMenuItem &)
+static std::string recovery_brief(const std::string &text, const char *fallback)
 {
-	char arg0[] = "/usr/sbin/zlyme-maskrom";
-	char *argv[] = {arg0, nullptr};
+	std::string line = text;
+	size_t nl = line.find('\n');
+	if (nl != std::string::npos)
+		line.resize(nl);
+	if (line.size() > 180)
+		line.resize(180);
+	return line.empty() ? fallback : line;
+}
+
+static InputReactionHint recovery_arm_now(AbstractMenuItem &)
+{
+	char arg0[] = "/usr/sbin/zlyme-preloader";
+	char prep[] = "prepare-recovery";
+	char *pargv[] = {arg0, prep, nullptr};
+	int code = 0;
+	std::string text = run_argv(pargv, &code);
+	if (code != 0) {
+		MenuList::showOverlay(
+			recovery_brief(text, "Prepare failed. Recovery was not armed."),
+			OverlayDismissMode::DismissOnA);
+		return NoOp;
+	}
+	char arm[] = "arm-recovery";
+	char *aargv[] = {arg0, arm, nullptr};
+	text = run_argv(aargv, &code);
+	std::string msg;
+	if (code == 0)
+		msg = "Recovery armed. Keep the right Zlyme card inserted to boot Zlyme. To enter MASKROM, shut down, remove the right card, then power on. Use Disarm recovery to restore normal boot.";
+	else if (text.find("source preloader restored and verified") != std::string::npos)
+		msg = "Arm failed. The previous preloader was restored and verified.";
+	else if (text.find("CRITICAL:") != std::string::npos)
+		msg = "CRITICAL: arm failed and rollback could not be verified.";
+	else
+		msg = recovery_brief(text, "Arm failed.");
+	MenuList::showOverlay(msg, OverlayDismissMode::DismissOnA);
+	return NoOp;
+}
+
+static InputReactionHint recovery_disarm_now(AbstractMenuItem &)
+{
+	char arg0[] = "/usr/sbin/zlyme-preloader";
+	char cmd[] = "disarm-recovery";
+	char *argv[] = {arg0, cmd, nullptr};
 	int code = 0;
 	std::string text = run_argv(argv, &code);
-	(void)code;
-	/* A successful restart does not return, so there is no success screen.
-	 * The helper's own sentence is the failure: a write error, or a
-	 * queued request whose ordinary reboot did not start.
-	 */
-	if (text.empty())
-		text = "Could not request a MASKROM restart.";
-	MenuList::showOverlay(text, OverlayDismissMode::DismissOnA);
+	std::string msg;
+	if (code == 0)
+		msg = "Normal preloader restored and verified.";
+	else if (text.find("recovery preloader restored and verified") != std::string::npos)
+		msg = "Disarm failed. The recovery preloader was restored and verified.";
+	else if (text.find("CRITICAL:") != std::string::npos)
+		msg = "CRITICAL: disarm failed and rollback could not be verified.";
+	else if (text.find("not the recovery image") != std::string::npos
+		|| text.find("recovery binding refused") != std::string::npos
+		|| text.find("recovery manifest is missing") != std::string::npos)
+		msg = "Disarm refused. This preloader is not an armed recovery image.";
+	else
+		msg = recovery_brief(text, "Disarm refused.");
+	MenuList::showOverlay(msg, OverlayDismissMode::DismissOnA);
 	return NoOp;
 }
 
@@ -807,30 +869,46 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 			system("zlyme-ctl apply-logs");
 		}});
 	const char *restore_desc =
-		"Writes the original backup to internal NAND.\n"
-		"The current preloader is saved first.\n"
+		"Restores the original Miyoo preloader.\n"
+		"This is not how you leave MASKROM recovery.\n"
 		"A failed write is not success.";
-	const char *maskrom_desc =
-		"Connect the bottom USB-C to the PC before continuing.\n"
-		"This restarts into Rockchip USB recovery.\n"
-		"It does not erase the preloader.\n"
-		"A later reset or power cycle can boot normally.";
+	const char *arm_desc =
+		"Right-slot Zlyme still boots.\n"
+		"Without a bootable right card,\n"
+		"startup enters MASKROM.";
+	const char *arm_warn =
+		"Installs a recovery preloader in NAND.\n"
+		"A bootable Zlyme card in the RIGHT slot still boots Zlyme.\n"
+		"Without that card, startup enters MASKROM.\n"
+		"Stock internal boot stays off until disarm.";
+	const char *disarm_desc =
+		"Restores the exact pre-recovery image.\n"
+		"This is not a stock restore.";
+	const char *disarm_warn =
+		"Writes that saved image back to NAND.\n"
+		"Only when it is the source of the live recovery image.\n"
+		"This does not restore the original Miyoo preloader.";
 	std::vector<AbstractMenuItem *> recovery;
 	recovery.push_back(new MenuItem{ListItemType::Button, "Preloader status",
-		"Partition, backup, and battery.",
+		"Internal boot and recovery state.",
 		recovery_status});
+	recovery.push_back(new MenuItem{ListItemType::Button, "Arm MASKROM recovery",
+		arm_desc, DeferToSubmenu,
+		recovery_stage("Arm MASKROM recovery", arm_warn,
+			recovery_final("Arm MASKROM recovery",
+				"ARM MASKROM RECOVERY", recovery_arm_now))});
+	recovery.push_back(new MenuItem{ListItemType::Button, "Disarm MASKROM recovery",
+		disarm_desc, DeferToSubmenu,
+		recovery_stage("Disarm MASKROM recovery", disarm_warn,
+			recovery_final("Disarm MASKROM recovery",
+				"DISARM MASKROM RECOVERY", recovery_disarm_now))});
 	recovery.push_back(new MenuItem{ListItemType::Button, "Restore stock preloader",
 		restore_desc, DeferToSubmenu,
 		recovery_stage("Restore stock preloader", restore_desc,
 			recovery_final("Restore stock preloader",
 				"RESTORE STOCK PRELOADER", recovery_restore_now))});
-	recovery.push_back(new MenuItem{ListItemType::Button, "Reboot to MASKROM",
-		maskrom_desc, DeferToSubmenu,
-		recovery_stage("Reboot to MASKROM", maskrom_desc,
-			recovery_final("Reboot to MASKROM",
-				"REBOOT TO MASKROM", recovery_maskrom_now))});
 	advanced.push_back(new MenuItem{ListItemType::Generic, "Recovery",
-		"Preloader status, stock restore, and reboot to MASKROM.",
+		"Preloader status, MASKROM recovery, and stock restore.",
 		{}, {}, nullptr, nullptr, DeferToSubmenu,
 		new MenuList(MenuItemType::Fixed, "Recovery", recovery)});
 	advanced.push_back(new MenuItem{ListItemType::Button, "Reset Settings",
