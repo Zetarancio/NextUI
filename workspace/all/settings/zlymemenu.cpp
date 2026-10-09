@@ -481,6 +481,21 @@ static InputReactionHint Zlyme_resetSettings(AbstractMenuItem &item)
 	return NoOp;
 }
 
+static InputReactionHint Zlyme_resetPortMaster(AbstractMenuItem &item)
+{
+	(void)item;
+	if (!wait_ab_game(
+		"Reset PortMaster and its settings?\nInstalled ports will be kept.\nPortMaster runtimes may need to be downloaded again.",
+		"RESET", "BACK"))
+		return NoOp;
+	if (!run_reset("portmaster")) {
+		MenuList::showOverlay("Reset failed", OverlayDismissMode::DismissOnA);
+		return NoOp;
+	}
+	MenuList::showOverlay("PortMaster reset", OverlayDismissMode::DismissOnA);
+	return NoOp;
+}
+
 static InputReactionHint Zlyme_factoryReset(AbstractMenuItem &item)
 {
 	(void)item;
@@ -873,6 +888,9 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 	advanced.push_back(new MenuItem{ListItemType::Button, "Reset Settings",
 		"Return product settings to defaults.\nGames, saves, Wi-Fi and paired devices stay.",
 		Zlyme_resetSettings});
+	advanced.push_back(new MenuItem{ListItemType::Button, "Reset PortMaster",
+		"Remove PortMaster and its settings.\nInstalled ports stay. Runtimes may download again.",
+		Zlyme_resetPortMaster});
 	advanced.push_back(new MenuItem{ListItemType::Button, "Factory Reset",
 		"Restore settings and stock Tools/Emus.\nGames, saves, Wi-Fi and personal content stay.",
 		Zlyme_factoryReset});
