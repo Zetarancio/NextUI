@@ -217,6 +217,8 @@ InputReactionHint MenuItem::handleInput(int &dirty)
         int subMenuJustClosed = 0;
         hint = submenu->handleInput(dirty, subMenuJustClosed);
         if (subMenuJustClosed) {
+            // Leave the current confirm callback in place. A completed
+            // Recovery write already replaced the NAND callback.
             defer(false);
             dirty = 1;
             // Cancel returns NoOp (stay on Options). Confirm returns Exit

@@ -1,5 +1,6 @@
 #include "zlymemenu.hpp"
 #include "keyboardprompt.hpp"
+#include "oneshot.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -710,7 +711,8 @@ static void recovery_offer_power(AbstractMenuItem &item, const char *title,
 	rows.push_back(new MenuItem{ListItemType::Button, "Restart", desc,
 		recovery_restart});
 	item.setSubMenu(new MenuList(MenuItemType::Fixed, title, rows));
-	item.defer(true);
+	// DeferToSubmenu only reopens that list. It does not run the NAND command.
+	detach_verified_write(item, DeferToSubmenu);
 }
 
 static InputReactionHint recovery_arm_now(AbstractMenuItem &item)

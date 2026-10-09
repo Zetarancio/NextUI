@@ -9,6 +9,7 @@ extern "C"
 
 #include <cassert>
 #include <string>
+#include <utility>
 #include <vector>
 #include <functional>
 #include <algorithm>
@@ -192,6 +193,8 @@ public:
     const std::string &getName() const { return name; }
     const std::string &getDesc() const { return desc; }
     void setDesc(const std::string &d) { desc = d; }
+    // Replaces A on this item for the rest of the Settings process.
+    void setConfirmCallback(MenuListCallback cb) { on_confirm = std::move(cb); }
     const ListItemType getType() const { return type; }
 
     virtual void drawCustomItem(SDL_Surface *surface, const SDL_Rect &dst, const AbstractMenuItem &item, bool selected) const {}
