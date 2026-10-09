@@ -69,7 +69,7 @@ struct Context
     // for how to use menu.cpp in different ways depending on the needs of the app
     bool appManagesTitle = false;
     bool appManagesIndicator = true;
-    bool appManagesHints = false;
+    bool appManagesHints = true;
 };
 
 // This is all the MinUiSettings stuff, for now just copied over from the old settings app
@@ -1094,7 +1094,7 @@ int main(int argc, char *argv[])
         } else if(deviceInfo.hasBluetooth())
             mainItems.push_back(new MenuItem{ListItemType::Generic, "Bluetooth", "Pair and connect HID", {}, {}, nullptr, nullptr, DeferToSubmenu, new Bluetooth::Menu(appQuit, ctx.dirty)});
 
-        mainItems.push_back(new MenuItem{ListItemType::Generic, "Game", "Saves, RetroAchievements, and cleanup", {}, {}, nullptr, nullptr, DeferToSubmenu, inGameMenu});
+        mainItems.push_back(new MenuItem{ListItemType::Generic, "Game", "Saves, RetroAchievements, cleanup, and PortMaster", {}, {}, nullptr, nullptr, DeferToSubmenu, inGameMenu});
         mainItems.push_back(new MenuItem{ListItemType::Generic, "Appearance", "UI customization", {}, {}, nullptr, nullptr, DeferToSubmenu, appearanceMenu});
         mainItems.push_back(new MenuItem{ListItemType::Generic, "System", "Display, sleep, joysticks, and backup", {}, {}, nullptr, nullptr, DeferToSubmenu, systemMenu});
 
@@ -1192,8 +1192,9 @@ int main(int argc, char *argv[])
                     titleRect = {SCALE1(PADDING), SCALE1(PADDING), max_width, SCALE1(PILL_SIZE)};
                 }
 
-                // bottom area, button hints
-                if (ctx.appManagesHints)
+                // bottom area, button hints. A custom page that draws its
+                // own controls owns this band; do not paint the generic pair on top.
+                if (ctx.appManagesHints && !ctx.menu->activeMenu()->ownsHints())
                 {
                     if (ctx.show_setting && !GetHDMI())
                         GFX_blitHardwareHints(ctx.screen, ctx.show_setting);

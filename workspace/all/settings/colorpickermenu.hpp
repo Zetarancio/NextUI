@@ -29,6 +29,7 @@ public:
 
     void reset(uint32_t color, std::vector<ColorPreset> newPresets, std::string label);
 
+    bool ownsHints() const override { return true; }
     InputReactionHint handleInput(int &dirty, int &quit) override;
     void drawCustom(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rect &dstTitle) override;
 };

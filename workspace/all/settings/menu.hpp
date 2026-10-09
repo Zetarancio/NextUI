@@ -359,6 +359,14 @@ public:
 
     SDL_Rect itemSizeHint(const AbstractMenuItem &item);
 
+    // Settings pages should expose useful button hints.
+    // A normal MenuList uses the standard hints drawn by Settings.
+    // A custom page that draws its own controls overrides ownsHints()
+    // so those hints are not drawn twice. Ownership follows the active
+    // submenu, not the menu that opened it.
+    virtual bool ownsHints() const { return false; }
+    MenuList *activeMenu();
+
     void draw(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rect &dstTitle);
     void drawList(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rect &dstTitle);
     void drawListItem(SDL_Surface *surface, const SDL_Rect &dst, const AbstractMenuItem &item, bool selected);

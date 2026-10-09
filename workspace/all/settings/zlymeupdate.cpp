@@ -744,6 +744,8 @@ public:
         lines.clear();
     }
 
+    bool ownsHints() const override { return true; }
+
     void drawCustom(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rect &dstTitle) override
     {
         (void)dstTitle;

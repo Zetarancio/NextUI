@@ -466,6 +466,14 @@ static void request_session_reboot(void)
 	Zlyme_requestLeave();
 }
 
+static void request_session_poweroff(void)
+{
+	FILE *f = fopen("/tmp/poweroff", "w");
+	if (f)
+		fclose(f);
+	Zlyme_requestLeave();
+}
+
 static InputReactionHint Zlyme_resetSettings(AbstractMenuItem &item)
 {
 	(void)item;
@@ -638,7 +646,10 @@ static InputReactionHint recovery_status(AbstractMenuItem &item)
 	return NoOp;
 }
 
-static InputReactionHint recovery_restore_now(AbstractMenuItem &)
+static void recovery_offer_power(AbstractMenuItem &item, const char *title,
+	const std::string &desc);
+
+static InputReactionHint recovery_restore_now(AbstractMenuItem &item)
 {
 	char arg0[] = "/usr/sbin/zlyme-preloader";
 	char arg1[] = "restore";
@@ -646,9 +657,14 @@ static InputReactionHint recovery_restore_now(AbstractMenuItem &)
 	int code = 0;
 	std::string text = run_argv(argv, &code);
 	std::string msg;
-	if (code == 0)
-		msg = "Restore finished. The readback hash matched the backup.";
-	else if (text.find("previous preloader restored and verified") != std::string::npos)
+	if (code == 0) {
+		recovery_offer_power(item, "Stock preloader restored",
+			"Restore finished. The readback hash matched the backup.\n"
+			"Write verified.\n"
+			"Shut down or restart?");
+		return NoOp;
+	}
+	if (text.find("previous preloader restored and verified") != std::string::npos)
 		msg = "Restore failed; previous preloader restored and verified.";
 	else if (text.find("CRITICAL:") != std::string::npos)
 		msg = "CRITICAL: restore failed and rollback could not be verified.";
@@ -671,7 +687,33 @@ static std::string recovery_brief(const std::string &text, const char *fallback)
 	return line.empty() ? fallback : line;
 }
 
-static InputReactionHint recovery_arm_now(AbstractMenuItem &)
+static InputReactionHint recovery_shut_down(AbstractMenuItem &)
+{
+	request_session_poweroff();
+	return NoOp;
+}
+
+static InputReactionHint recovery_restart(AbstractMenuItem &)
+{
+	request_session_reboot();
+	return NoOp;
+}
+
+// A normal list, so B is Back and A activates the selected row.
+// B must not itself be a power action.
+static void recovery_offer_power(AbstractMenuItem &item, const char *title,
+	const std::string &desc)
+{
+	std::vector<AbstractMenuItem *> rows;
+	rows.push_back(new MenuItem{ListItemType::Button, "Shut down", desc,
+		recovery_shut_down});
+	rows.push_back(new MenuItem{ListItemType::Button, "Restart", desc,
+		recovery_restart});
+	item.setSubMenu(new MenuList(MenuItemType::Fixed, title, rows));
+	item.defer(true);
+}
+
+static InputReactionHint recovery_arm_now(AbstractMenuItem &item)
 {
 	char arg0[] = "/usr/sbin/zlyme-preloader";
 	char prep[] = "prepare-recovery";
@@ -688,9 +730,16 @@ static InputReactionHint recovery_arm_now(AbstractMenuItem &)
 	char *aargv[] = {arg0, arm, nullptr};
 	text = run_argv(aargv, &code);
 	std::string msg;
-	if (code == 0)
-		msg = "Recovery armed. Keep a bootable card in the right slot for normal boot. To enter MASKROM, shut down, remove the right card, then power on.";
-	else if (text.find("source preloader restored and verified") != std::string::npos)
+	if (code == 0) {
+		recovery_offer_power(item, "Recovery armed",
+			"Recovery is armed.\n"
+			"To enter MASKROM:\n"
+			"shut down, remove the right-hand bootable card,\n"
+			"then power on again.\n"
+			"Restart only performs a normal reboot.");
+		return NoOp;
+	}
+	if (text.find("source preloader restored and verified") != std::string::npos)
 		msg = "Arm failed. The previous preloader was restored and verified.";
 	else if (text.find("CRITICAL:") != std::string::npos)
 		msg = "CRITICAL: arm failed and rollback could not be verified.";
@@ -700,7 +749,7 @@ static InputReactionHint recovery_arm_now(AbstractMenuItem &)
 	return NoOp;
 }
 
-static InputReactionHint recovery_disarm_now(AbstractMenuItem &)
+static InputReactionHint recovery_disarm_now(AbstractMenuItem &item)
 {
 	char arg0[] = "/usr/sbin/zlyme-preloader";
 	char cmd[] = "disarm-recovery";
@@ -708,9 +757,14 @@ static InputReactionHint recovery_disarm_now(AbstractMenuItem &)
 	int code = 0;
 	std::string text = run_argv(argv, &code);
 	std::string msg;
-	if (code == 0)
-		msg = "Normal preloader restored and verified.";
-	else if (text.find("recovery preloader restored and verified") != std::string::npos)
+	if (code == 0) {
+		recovery_offer_power(item, "Preloader restored",
+			"Normal preloader restored and verified.\n"
+			"Write verified.\n"
+			"Shut down or restart?");
+		return NoOp;
+	}
+	if (text.find("recovery preloader restored and verified") != std::string::npos)
 		msg = "Disarm failed. The recovery preloader was restored and verified.";
 	else if (text.find("CRITICAL:") != std::string::npos)
 		msg = "CRITICAL: disarm failed and rollback could not be verified.";
@@ -888,9 +942,6 @@ void Zlyme_appendSystemItems(std::vector<AbstractMenuItem *> &items)
 	advanced.push_back(new MenuItem{ListItemType::Button, "Reset Settings",
 		"Return product settings to defaults.\nGames, saves, Wi-Fi and paired devices stay.",
 		Zlyme_resetSettings});
-	advanced.push_back(new MenuItem{ListItemType::Button, "Reset PortMaster",
-		"Remove PortMaster and its settings.\nInstalled ports stay. Runtimes may download again.",
-		Zlyme_resetPortMaster});
 	advanced.push_back(new MenuItem{ListItemType::Button, "Factory Reset",
 		"Restore settings and stock Tools/Emus.\nGames, saves, Wi-Fi and personal content stay.",
 		Zlyme_factoryReset});
@@ -1187,7 +1238,7 @@ static int wait_ab_game(const std::string &msg, const char *aLabel, const char *
 
 void Zlyme_promptRebootOnExit(void)
 {
-	if (access("/tmp/reboot", F_OK) == 0)
+	if (access("/tmp/reboot", F_OK) == 0 || access("/tmp/poweroff", F_OK) == 0)
 		return;
 	int status = system("zlyme-bootcfg dirty /tmp/zlyme-bootcfg");
 	if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
@@ -1395,6 +1446,9 @@ void Zlyme_appendGameCleanup(std::vector<AbstractMenuItem *> &items)
 			(void)item;
 			return cleanup_button("standalones", "No standalone settings", "Reset %d standalone settings?");
 		}});
+	items.push_back(new MenuItem{ListItemType::Button, "Reset PortMaster",
+		"Remove PortMaster and its settings.\nInstalled ports stay. Runtimes may download again.",
+		Zlyme_resetPortMaster});
 	items.push_back(new MenuItem{ListItemType::Button, "Orphan per-ROM RetroArch configs",
 		"Remove per-ROM RetroArch configs whose ROM is missing.",
 		[](AbstractMenuItem &item) -> InputReactionHint {

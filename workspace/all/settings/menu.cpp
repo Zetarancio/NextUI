@@ -340,6 +340,17 @@ MenuList::~MenuList()
     items.clear();
 }
 
+MenuList *MenuList::activeMenu()
+{
+    ReadLock r(itemLock);
+    if (scope.selected >= 0 && scope.selected < (int)items.size()) {
+        AbstractMenuItem *it = items[scope.selected];
+        if (it && it->isDeferred() && it->getSubMenu())
+            return it->getSubMenu()->activeMenu();
+    }
+    return this;
+}
+
 void MenuList::performLayout(const SDL_Rect &dst)
 {
     ReadLock r(itemLock);
