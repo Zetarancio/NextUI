@@ -28,6 +28,7 @@ extern "C"
 #include "btmenu.hpp"
 #include "keyboardprompt.hpp"
 #include "colorpickermenu.hpp"
+#include "layout.hpp"
 #include "palettemenu.hpp"
 #include "fnbuttonmenu.hpp"
 #include "zlymemenu.hpp"
@@ -1120,16 +1121,15 @@ int main(int argc, char *argv[])
             bgbmp = scaled;
         }
 
-        // main content (list)
-        // PADDING all around
-        SDL_Rect listRect = {SCALE1(PADDING), SCALE1(PADDING), ctx.screen->w - SCALE1(PADDING * 2), ctx.screen->h - SCALE1(PADDING * 2)};
+        // PADDING all around. The hint pills sit in the bottom padding
+        // plus one pill, so reserve PILL_SIZE, not BUTTON_SIZE.
+        const bool reserve_title = ctx.appManagesTitle || ctx.appManagesIndicator;
+        const ZlymeContentRect content = zlyme_settings_content(
+            ctx.screen->w, ctx.screen->h,
+            SCALE1(PADDING), SCALE1(PILL_SIZE), SCALE1(PILL_SIZE),
+            reserve_title, ctx.appManagesHints);
+        SDL_Rect listRect = {content.x, content.y, content.w, content.h};
         SDL_Rect titleRect = {0, 0, 0, 0};
-        // PILL_SIZE above (if showing title)
-        if (ctx.appManagesTitle || ctx.appManagesIndicator)
-            listRect = dy(listRect, SCALE1(PILL_SIZE));
-        // BUTTON_SIZE below (if showing hints)
-        if (ctx.appManagesHints)
-            listRect.h -= SCALE1(BUTTON_SIZE);
         ctx.menu->performLayout(listRect);
 
         while (!appQuit)

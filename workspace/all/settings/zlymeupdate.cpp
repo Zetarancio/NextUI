@@ -762,10 +762,8 @@ public:
         int body_h = TTF_FontHeight(font.small);
         if (body_h < 1)
             body_h = 16;
-        // The hint pills sit on the full screen, overlapping the bottom of dst.
-        int hint_reserve = SCALE1(PILL_SIZE);
+        // dst already ends at the hint pills. Do not reserve that band again.
         int y = dst.y;
-        int top = y;
         SDL_Color color = uintToColour(THEME_COLOR4_255);
         auto blit_line = [&](TTF_Font *face, int lh, const std::string &text) {
             if (!text.empty()) {
@@ -778,7 +776,7 @@ public:
             }
             y += lh;
         };
-        int room = dst.y + dst.h - hint_reserve - top;
+        int room = dst.h;
         visible = room / body_h;
         if (visible < 1)
             visible = 1;

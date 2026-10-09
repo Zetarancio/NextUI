@@ -448,8 +448,8 @@ void ColorPickerMenu::drawCustom(SDL_Surface *surface, const SDL_Rect &dst, cons
             dst.w,
             SCALE1(BUTTON_SIZE)
         };
-        if(row.y + row.h > dst.y + dst.h - SCALE1(BUTTON_SIZE)) 
-            break; // don't draw outside the menu area
+        if (row.y + row.h > dst.y + dst.h)
+            break;
         drawPreset(surface, row, presets[i], selected == NUM_SLIDERS + i);
     }
 }
