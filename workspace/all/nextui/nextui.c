@@ -1360,13 +1360,17 @@ static Array* getEntries(char* path){
 
 ///////////////////////////////////////
 
-static void queue_pak(const char *exe, const char *rom) {
+static int queue_pak(const char *exe, const char *rom) {
 	if (launch_queue_write(exe, rom) != 0) {
 		LOG_info("launch rejected\n");
-		return;
+		/* A failed write leaves an older file in place. Drop it so
+		 * exiting later cannot run that unrelated record. */
+		unlink("/tmp/next");
+		return 0;
 	}
 	LOG_info("launch: %s\n", exe);
 	quit = 1;
+	return 1;
 }
 
 ///////////////////////////////////////
@@ -1449,7 +1453,8 @@ static int autoResume(void) {
 	if (!exists(emu_path)) return 0;
 
 	putInt(RESUME_SLOT_PATH, AUTO_RESUME_SLOT);
-	queue_pak(emu_path, sd_path);
+	if (!queue_pak(emu_path, sd_path))
+		return 0;
 	return 1;
 }
 
@@ -1496,8 +1501,7 @@ static int runFnAction(int index) {
 		saveLast(entry->path);
 	}
 
-	queue_pak(launch_path, NULL);
-	return 1;
+	return queue_pak(launch_path, NULL);
 }
 static void openRom(char* path, char* last) {
 	LOG_info("openRom(%s,%s)\n", path, last);
