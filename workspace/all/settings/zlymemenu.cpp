@@ -2,6 +2,7 @@
 #include "keyboardprompt.hpp"
 #include "oneshot.hpp"
 
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -398,10 +399,172 @@ static void Zlyme_appendProxyItem(std::vector<AbstractMenuItem *> &items)
 		new MenuList(MenuItemType::Fixed, "Proxy", std::move(proxy_items))});
 }
 
+static int auth_run(const std::vector<std::string> &args, const std::string *input,
+	std::string *out_text, std::string *err_text)
+{
+	int inp[2] = {-1, -1};
+	int outp[2] = {-1, -1};
+	int errp[2] = {-1, -1};
+	if (pipe(outp) != 0)
+		return -1;
+	if (pipe(errp) != 0) {
+		close(outp[0]);
+		close(outp[1]);
+		return -1;
+	}
+	if (input && pipe(inp) != 0) {
+		close(outp[0]);
+		close(outp[1]);
+		close(errp[0]);
+		close(errp[1]);
+		return -1;
+	}
+	pid_t pid = fork();
+	if (pid < 0) {
+		close(outp[0]);
+		close(outp[1]);
+		close(errp[0]);
+		close(errp[1]);
+		if (input) {
+			close(inp[0]);
+			close(inp[1]);
+		}
+		return -1;
+	}
+	if (pid == 0) {
+		if (input)
+			dup2(inp[0], STDIN_FILENO);
+		dup2(outp[1], STDOUT_FILENO);
+		dup2(errp[1], STDERR_FILENO);
+		if (input) {
+			close(inp[0]);
+			close(inp[1]);
+		}
+		close(outp[0]);
+		close(outp[1]);
+		close(errp[0]);
+		close(errp[1]);
+		std::vector<char *> argv;
+		argv.push_back(const_cast<char *>("zlyme-ssh-auth"));
+		for (const auto &arg : args)
+			argv.push_back(const_cast<char *>(arg.c_str()));
+		argv.push_back(nullptr);
+		execvp("zlyme-ssh-auth", argv.data());
+		_exit(127);
+	}
+	if (input) {
+		close(inp[0]);
+		const char *p = input->data();
+		size_t left = input->size();
+		while (left > 0) {
+			ssize_t n = write(inp[1], p, left);
+			if (n < 0) {
+				if (errno == EINTR)
+					continue;
+				break;
+			}
+			p += n;
+			left -= (size_t)n;
+		}
+		close(inp[1]);
+	}
+	close(outp[1]);
+	close(errp[1]);
+	auto read_fd = [](int fd) {
+		std::string text;
+		char buf[256];
+		for (;;) {
+			ssize_t n = read(fd, buf, sizeof(buf));
+			if (n < 0) {
+				if (errno == EINTR)
+					continue;
+				break;
+			}
+			if (n == 0)
+				break;
+			text.append(buf, buf + n);
+		}
+		return text;
+	};
+	if (out_text)
+		*out_text = read_fd(outp[0]);
+	else
+		read_fd(outp[0]);
+	close(outp[0]);
+	if (err_text)
+		*err_text = read_fd(errp[0]);
+	else
+		read_fd(errp[0]);
+	close(errp[0]);
+	int status = 0;
+	while (waitpid(pid, &status, 0) < 0) {
+		if (errno != EINTR)
+			return -1;
+	}
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		return -1;
+	return 0;
+}
+
+static void auth_trim_err(std::string *err, const std::string &message)
+{
+	std::string text = message;
+	while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
+		text.pop_back();
+	if (err)
+		*err = text;
+}
+
+static bool ssh_set(const std::string &password, std::string *err)
+{
+	std::string message;
+	int rc = auth_run({"set"}, &password, nullptr, &message);
+	auth_trim_err(err, message);
+	return rc == 0;
+}
+
+static bool ssh_clear(std::string *err)
+{
+	std::string message;
+	int rc = auth_run({"clear"}, nullptr, nullptr, &message);
+	auth_trim_err(err, message);
+	return rc == 0;
+}
+
+std::string Zlyme_sshPassword()
+{
+	std::string out;
+	if (auth_run({"get"}, nullptr, &out, nullptr) != 0)
+		return "";
+	return out;
+}
+
+std::string Zlyme_sshPasswordDisplay()
+{
+	std::string out;
+	if (auth_run({"get"}, nullptr, &out, nullptr) != 0)
+		return "(unavailable)";
+	if (out.empty())
+		return "(empty)";
+	return out;
+}
+
 void Zlyme_appendNetworkItems(std::vector<AbstractMenuItem *> &items)
 {
 	const std::vector<std::any> on_off_v = {false, true};
 	const std::vector<std::string> on_off = {"Off", "On"};
+
+	auto *ssh_prompt = new KeyboardPrompt("SSH password", [](AbstractMenuItem &item) -> InputReactionHint {
+		std::string err;
+		const std::string typed = item.getName();
+		bool ok = typed.empty() ? ssh_clear(&err) : ssh_set(typed, &err);
+		if (!ok) {
+			MenuList::showOverlay(err.empty() ? "Could not save SSH password." : err,
+				OverlayDismissMode::DismissOnA);
+			return NoOp;
+		}
+		return Exit;
+	});
 
 	Zlyme_appendProxyItem(items);
 	items.push_back(new MenuItem{ListItemType::Generic, "SSH",
@@ -410,6 +573,27 @@ void Zlyme_appendNetworkItems(std::vector<AbstractMenuItem *> &items)
 		[]() -> std::any { return ctl_on("ssh"); },
 		[](const std::any &v) { service_apply("ssh", "/etc/init.d/S50sshd", std::any_cast<bool>(v)); },
 		[]() { service_apply("ssh", "/etc/init.d/S50sshd", true); }});
+	items.push_back(new TextInputMenuItem{"SSH Password",
+		"Root login. An empty password is allowed.",
+		[]() -> std::any {
+			return Zlyme_sshPassword().empty() ? std::string("Set") : std::string("Change");
+		},
+		[ssh_prompt](AbstractMenuItem &item) -> InputReactionHint {
+			ssh_prompt->setInitialText(Zlyme_sshPassword());
+			item.defer(true);
+			return NoOp;
+		},
+		ssh_prompt});
+	items.push_back(new MenuItem{ListItemType::Button, "Clear SSH password",
+		"Remove the SSH password. SSH stays on.",
+		[](AbstractMenuItem &) -> InputReactionHint {
+			std::string err;
+			if (!ssh_clear(&err)) {
+				MenuList::showOverlay(err.empty() ? "Could not clear SSH password." : err,
+					OverlayDismissMode::DismissOnA);
+			}
+			return NoOp;
+		}});
 	items.push_back(new MenuItem{ListItemType::Generic, "Samba",
 		"File share of /storage. Applies immediately.",
 		on_off_v, on_off,

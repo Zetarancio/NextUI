@@ -3,6 +3,11 @@
 #include "menu.hpp"
 #include "zlymeupdate.hpp"
 
+#include <string>
+
+std::string Zlyme_sshPassword();
+std::string Zlyme_sshPasswordDisplay();
+
 // Compiled into settings.elf so these are not Tools paks.
 InputReactionHint Zlyme_cycleHdmi(AbstractMenuItem &item);
 void Zlyme_appendDisplayItems(std::vector<AbstractMenuItem *> &items);
