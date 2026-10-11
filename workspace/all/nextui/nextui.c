@@ -15,6 +15,7 @@
 #include "utils.h"
 #include "config.h"
 #include "zlyme_prefs.h"
+#include "launch_queue.h"
 #include <sys/resource.h>
 #include <pthread.h>
 #include <sys/wait.h>
@@ -1359,45 +1360,13 @@ static Array* getEntries(char* path){
 
 ///////////////////////////////////////
 
-static void queueNext(char* cmd) {
-	LOG_info("cmd: %s\n", cmd);
-	putFile("/tmp/next", cmd);
+static void queue_pak(const char *exe, const char *rom) {
+	if (launch_queue_write(exe, rom) != 0) {
+		LOG_info("launch rejected\n");
+		return;
+	}
+	LOG_info("launch: %s\n", exe);
 	quit = 1;
-}
-
-// based on https://stackoverflow.com/a/31775567/145965
-static int replaceString(char *line, const char *search, const char *replace) {
-   char *sp; // start of pattern
-   if ((sp = strstr(line, search)) == NULL) {
-      return 0;
-   }
-   int count = 1;
-   int sLen = strlen(search);
-   int rLen = strlen(replace);
-   if (sLen > rLen) {
-      // move from right to left
-      char *src = sp + sLen;
-      char *dst = sp + rLen;
-      while((*dst = *src) != '\0') { dst++; src++; }
-   } else if (sLen < rLen) {
-      // move from left to right
-      int tLen = strlen(sp) - sLen;
-      char *stop = sp + rLen;
-      char *src = sp + sLen + tLen;
-      char *dst = sp + rLen + tLen;
-      while(dst >= stop) { *dst = *src; dst--; src--; }
-   }
-   memcpy(sp, replace, rLen);
-   count += replaceString(sp + rLen, search, replace);
-   return count;
-}
-static char* escapeSingleQuotes(char* str) {
-	// why not call replaceString directly?
-	// call points require the modified string be returned
-	// but replaceString is recursive and depends on its
-	// own return value (but does it need to?)
-	replaceString(str, "'", "'\\''");
-	return str;
 }
 
 ///////////////////////////////////////
@@ -1471,32 +1440,30 @@ static int autoResume(void) {
 	if (!exists(sd_path)) return 0;
 
 	// make sure emu still exists
-	char emu_name[256];
+	char emu_name[MAX_PATH];
 	getEmuName(sd_path, emu_name);
 
-	char emu_path[256];
+	char emu_path[MAX_PATH];
 	getEmuPath(emu_name, emu_path);
 
 	if (!exists(emu_path)) return 0;
 
-	char cmd[256];
-	sprintf(cmd, "'%s' '%s'", escapeSingleQuotes(emu_path), escapeSingleQuotes(sd_path));
 	putInt(RESUME_SLOT_PATH, AUTO_RESUME_SLOT);
-	queueNext(cmd);
+	queue_pak(emu_path, sd_path);
 	return 1;
 }
 
 static void openPak(char* path) {
-	// NOTE: escapeSingleQuotes() modifies the passed string
-	// so we need to save the path before we call that
-	// if (prefixMatch(ROMS_PATH, path)) {
-	// 	addRecent(path);
-	// }
-	saveLast(path);
+	char exe[MAX_PATH + 16];
+	int n;
 
-	char cmd[256];
-	sprintf(cmd, "'%s/launch.sh'", escapeSingleQuotes(path));
-	queueNext(cmd);
+	saveLast(path);
+	n = snprintf(exe, sizeof(exe), "%s/launch.sh", path);
+	if (n < 0 || (size_t)n >= sizeof(exe)) {
+		LOG_info("launch rejected\n");
+		return;
+	}
+	queue_pak(exe, NULL);
 }
 
 // Run the action bound to a user-assignable button (0 == FN1, 1 == FN2).
@@ -1513,11 +1480,13 @@ static int runFnAction(int index) {
 	const char* rel = action + prefix_len;
 	if (!rel[0]) return 0;
 
-	char pak_path[256];
-	snprintf(pak_path, sizeof(pak_path), "%s/Tools/%s/%s", SDCARD_PATH, PLATFORM, rel);
+	char pak_path[MAX_PATH];
+	int n = snprintf(pak_path, sizeof(pak_path), "%s/Tools/%s/%s", SDCARD_PATH, PLATFORM, rel);
+	if (n < 0 || (size_t)n >= sizeof(pak_path)) return 0;
 
-	char launch_path[256];
-	snprintf(launch_path, sizeof(launch_path), "%s/launch.sh", pak_path);
+	char launch_path[MAX_PATH];
+	n = snprintf(launch_path, sizeof(launch_path), "%s/launch.sh", pak_path);
+	if (n < 0 || (size_t)n >= sizeof(launch_path)) return 0;
 	if (!exists(launch_path)) return 0; // stale binding, eg. the pak was deleted
 
 	// unlike openPak() we save where the user *is*, not the pak itself, so exiting
@@ -1527,10 +1496,7 @@ static int runFnAction(int index) {
 		saveLast(entry->path);
 	}
 
-	char cmd[256];
-	// NOTE: escapeSingleQuotes() modifies pak_path in place
-	snprintf(cmd, sizeof(cmd), "'%s/launch.sh'", escapeSingleQuotes(pak_path));
-	queueNext(cmd);
+	queue_pak(launch_path, NULL);
 	return 1;
 }
 static void openRom(char* path, char* last) {
@@ -1549,7 +1515,7 @@ static void openRom(char* path, char* last) {
 		getFirstDisc(m3u_path, sd_path);
 	}
 
-	char emu_name[256];
+	char emu_name[MAX_PATH];
 	getEmuName(sd_path, emu_name);
 
 	int resume_disc = 0;
@@ -1583,11 +1549,9 @@ static void openRom(char* path, char* last) {
 	}
 	else putInt(RESUME_SLOT_PATH,8); // resume hidden default state
 
-	char emu_path[256];
+	char emu_path[MAX_PATH];
 	getEmuPath(emu_name, emu_path);
 
-	// NOTE: escapeSingleQuotes() modifies the passed string
-	// so we need to save the path before we call that
 	addRecent(recent_path, recent_alias); // yiiikes
 	saveLast(last==NULL ? sd_path : last);
 
@@ -1596,9 +1560,7 @@ static void openRom(char* path, char* last) {
 	char launch_rom[MAX_PATH];
 	snprintf(launch_rom, sizeof(launch_rom), "%s", (has_m3u && !resume_disc) ? m3u_path : sd_path);
 
-	char cmd[MAX_PATH * 2 + 32];
-	sprintf(cmd, "'%s' '%s'", escapeSingleQuotes(emu_path), escapeSingleQuotes(launch_rom));
-	queueNext(cmd);
+	queue_pak(emu_path, launch_rom);
 }
 
 static bool isDirectSubdirectory(const Directory* parent, const char* child_path) {

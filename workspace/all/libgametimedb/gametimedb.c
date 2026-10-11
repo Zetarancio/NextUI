@@ -12,6 +12,7 @@
 
 #include "gametimedb.h"
 
+/* ZLYME1 launch file. The ROM is the fourth line when the count is 2. */
 #define CMD_TO_RUN "/tmp/next"
 #define ROM_NOT_FOUND -1
 
@@ -349,26 +350,81 @@ int play_activity_get_play_time(const char *rom_path)
     return play_time;
 }
 
+static int launch_line(FILE *f, char *buf, size_t n)
+{
+    size_t len;
+
+    if (!fgets(buf, (int)n, f))
+        return 0;
+    len = strlen(buf);
+    if (len == 0 || buf[len - 1] != '\n')
+        return 0;
+    buf[len - 1] = '\0';
+    return 1;
+}
+
+static int launch_suffix(const char *s, const char *suf)
+{
+    size_t n = strlen(s);
+    size_t m = strlen(suf);
+
+    if (n < m)
+        return 0;
+    return memcmp(s + n - m, suf, m) == 0;
+}
+
+/* Same field rule as launch_queue.c: tab is allowed, other controls are not. */
+static int launch_text_ok(const char *s)
+{
+    const unsigned char *p;
+
+    for (p = (const unsigned char *)s; *p; p++) {
+        if ((*p < 0x20 && *p != '\t') || *p == 0x7f)
+            return 0;
+    }
+    return 1;
+}
+
 bool _get_active_rom_path(char *rom_path_out)
 {
-    char *ptr;
-    char cmd[STR_MAX];
-    getFile(CMD_TO_RUN, cmd, STR_MAX);
-    trimTrailingNewlines(cmd);
+    FILE *f;
+    char magic[16];
+    char argc[16];
+    char exe[4098];
+    char rom[4098];
+    char extra[8];
 
-    if (strlen(cmd) == 0) {
+    if (!rom_path_out)
+        return false;
+    rom_path_out[0] = '\0';
+    f = fopen(CMD_TO_RUN, "r");
+    if (!f)
+        return false;
+    if (!launch_line(f, magic, sizeof(magic)) || strcmp(magic, "ZLYME1") != 0) {
+        fclose(f);
         return false;
     }
-
-    if ((ptr = strrchr(cmd, '\'')) != NULL) {
-        *ptr = '\0';
+    if (!launch_line(f, argc, sizeof(argc)) || strcmp(argc, "2") != 0) {
+        fclose(f);
+        return false;
     }
-
-    if ((ptr = strrchr(cmd, '\'')) != NULL) {
-        strncpy(rom_path_out, ptr + 1, STR_MAX);
-        return true;
+    if (!launch_line(f, exe, sizeof(exe)) || !launch_text_ok(exe) ||
+        exe[0] != '/' || !launch_suffix(exe, "/launch.sh")) {
+        fclose(f);
+        return false;
     }
-    return false;
+    if (!launch_line(f, rom, sizeof(rom)) || !launch_text_ok(rom) ||
+        rom[0] == '\0' || strlen(rom) >= STR_MAX) {
+        fclose(f);
+        return false;
+    }
+    if (fgets(extra, sizeof(extra), f) != NULL) {
+        fclose(f);
+        return false;
+    }
+    fclose(f);
+    memcpy(rom_path_out, rom, strlen(rom) + 1);
+    return true;
 }
 
 int __db_get_active_closed_activity(sqlite3* game_log_db)
