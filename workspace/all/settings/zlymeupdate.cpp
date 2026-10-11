@@ -8,6 +8,7 @@ extern "C"
 
 #include "zlymeupdate.hpp"
 #include "zlymemenu.hpp"
+#include "dlrate.hpp"
 
 #include <curl/curl.h>
 
@@ -38,6 +39,15 @@ const char *kFailedNote = "/storage/.update/FAILED";
 const char *kHelper = "/usr/share/zlyme/github-release.py";
 const char *kTokenFile = "/storage/.config/github-token";
 const long long kSlackBytes = 50LL * 1024 * 1024;
+const char *kRebootWarning =
+	"Installing this update may require more than one reboot.\n"
+	"Keep the SD card inserted and do not power off the Flip\n"
+	"until Zlyme starts normally again.";
+
+std::string with_reboot_warning(const std::string &lead)
+{
+	return lead + "\n\n" + kRebootWarning;
+}
 const int kMinBatteryPct = 20;
 
 struct ReleaseMeta {
@@ -475,7 +485,8 @@ struct CurlDl {
     std::string error;
     std::mutex err_mu;
     long long resume = 0;
-    std::chrono::steady_clock::time_point t0;
+    // Bytes received in this attempt. A resumed prefix stays in now.
+    std::atomic<long long> fresh{0};
 };
 
 int xfer_cb(void *p, curl_off_t dltotal, curl_off_t dlnow, curl_off_t, curl_off_t)
@@ -483,6 +494,7 @@ int xfer_cb(void *p, curl_off_t dltotal, curl_off_t dlnow, curl_off_t, curl_off_
     auto *s = static_cast<CurlDl *>(p);
     if (s->cancel.load())
         return 1;
+    s->fresh.store(dlnow < 0 ? 0 : (long long)dlnow);
     s->now.store(s->resume + (long long)dlnow);
     if (dltotal > 0)
         s->total.store(s->resume + (long long)dltotal);
@@ -496,6 +508,7 @@ bool curl_to_file(const std::string &url, long asset_id, bool use_auth,
     if (!resume)
         already = 0;
     st->resume = already;
+    st->fresh.store(0);
     if (st->total.load() < already)
         st->total.store(already);
     st->now.store(already);
@@ -886,7 +899,7 @@ InputReactionHint do_download(AbstractMenuItem &item)
     if (file_exists(kQueuedTar)) {
         std::string queued = read_first_line(kQueuedName);
         if (queued.empty() || queued == g_rel.tar_name) {
-            if (wait_ab("Already queued.", "REBOOT", "LATER"))
+            if (wait_ab(with_reboot_warning("Already queued."), "REBOOT", "LATER"))
                 reboot_now();
             return NoOp;
         }
@@ -916,6 +929,7 @@ InputReactionHint do_download(AbstractMenuItem &item)
             confirm += " (" + fmt_mb(g_rel.tar_size) + ")";
         confirm += "?";
     }
+    confirm = with_reboot_warning(confirm);
     if (!wait_ab(confirm, "DOWNLOAD", "BACK"))
         return NoOp;
 
@@ -929,7 +943,6 @@ InputReactionHint do_download(AbstractMenuItem &item)
     CurlDl st;
     if (g_rel.tar_size > 0)
         st.total.store(g_rel.tar_size);
-    st.t0 = std::chrono::steady_clock::now();
     std::string tok = token_now();
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
@@ -958,25 +971,30 @@ InputReactionHint do_download(AbstractMenuItem &item)
     });
 
     std::string label = short_rel_label();
+    DlRate rate;
     while (!st.done.load()) {
         GFX_startFrame();
         PAD_poll();
-        if (PAD_justPressed(BTN_B))
+        if (PAD_justPressed(BTN_B)) {
             st.cancel.store(1);
+            rate.reset();
+        }
         long long n = st.now.load();
         long long t = st.total.load();
         int pct = (t > 0) ? (int)((n * 100) / t) : 0;
         if (pct > 100)
             pct = 100;
         double frac = (t > 0) ? (double)n / (double)t : 0;
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - st.t0)
-                      .count();
-        char msg[192];
-        if (ms > 1000 && n > 0) {
-            double mbs = (n / (1024.0 * 1024.0)) / (ms / 1000.0);
-            snprintf(msg, sizeof(msg), "Downloading %s\n%d%%\n%s / %s\n%.1f MB/s",
-                label.c_str(), pct, fmt_mb(n).c_str(), fmt_mb(t).c_str(), mbs);
+        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
+        long long bps = rate.sample(st.fresh.load(), now_ms);
+        char ratebuf[32];
+        zlyme_fmt_rate(bps, ratebuf, sizeof(ratebuf));
+        char msg[256];
+        if (ratebuf[0]) {
+            snprintf(msg, sizeof(msg), "Downloading %s\n%d%%\n%s / %s\n%s",
+                label.c_str(), pct, fmt_mb(n).c_str(), fmt_mb(t).c_str(), ratebuf);
         } else {
             snprintf(msg, sizeof(msg), "Downloading %s\n%d%%\n%s / %s",
                 label.c_str(), pct, fmt_mb(n).c_str(), fmt_mb(t).c_str());
@@ -1024,10 +1042,10 @@ InputReactionHint do_download(AbstractMenuItem &item)
            "/storage/.update/zlyme-my355-[0-9]*.sha256 >/dev/null 2>&1");
     (void)system("sync");
 
-    if (wait_ab("Queued. Reboot applies it.", "REBOOT", "LATER"))
+    if (wait_ab(with_reboot_warning("Queued. Reboot applies it."), "REBOOT", "LATER"))
         reboot_now();
     else
-        overlay_ok("Queued. Reboot when you are ready.");
+        overlay_ok(with_reboot_warning("Queued. Reboot when you are ready."));
     return NoOp;
 }
 
