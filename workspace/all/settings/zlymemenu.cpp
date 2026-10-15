@@ -1469,7 +1469,7 @@ static bool cleanup_run(const char *action)
 	return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
-static InputReactionHint cleanup_button(const char *action, const char *empty_msg, const char *ask_fmt)
+static InputReactionHint cleanup_button(const char *action, const char *empty_msg, const char *ask_fmt, const char *a_label = "DELETE")
 {
 	std::string extra;
 	int n = cleanup_count(action, &extra);
@@ -1487,7 +1487,7 @@ static InputReactionHint cleanup_button(const char *action, const char *empty_ms
 		strncat(ask, "\n", sizeof(ask) - strlen(ask) - 1);
 		strncat(ask, extra.c_str(), sizeof(ask) - strlen(ask) - 1);
 	}
-	if (!wait_ab_game(ask, "DELETE", "BACK"))
+	if (!wait_ab_game(ask, a_label, "BACK"))
 		return NoOp;
 	if (!cleanup_run(action)) {
 		MenuList::showOverlay("Cleanup failed", OverlayDismissMode::DismissOnA);
@@ -1625,6 +1625,13 @@ void Zlyme_appendGameCleanup(std::vector<AbstractMenuItem *> &items)
 		[](AbstractMenuItem &item) -> InputReactionHint {
 			(void)item;
 			return cleanup_button("ra-cores", "No core options", "Delete %d RetroArch option files?");
+		}});
+	items.push_back(new MenuItem{ListItemType::Button, "Reset RetroArch configuration",
+		"Restore the stock RetroArch configuration.\nCore options, cores, saves, and BIOS stay.",
+		[](AbstractMenuItem &item) -> InputReactionHint {
+			(void)item;
+			return cleanup_button("ra-cfg", "No RetroArch configuration",
+				"Restore the stock RetroArch configuration?", "RESET");
 		}});
 	items.push_back(new MenuItem{ListItemType::Button, "Reset standalone settings",
 		"Reset standalone emulator settings.\nGames and saves are kept.",
