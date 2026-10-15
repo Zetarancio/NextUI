@@ -181,6 +181,7 @@ static struct PWR_Context
 	int can_poweroff;
 	int can_autosleep;
 	int requested_sleep;
+	int requested_lid_sleep;
 	int requested_wake;
 	int resume_tick;
 
@@ -3230,8 +3231,12 @@ LID_Context lid = {
 	.is_open = 1,
 };
 
+/* Set after a lid-close mem while the lid is still shut. */
+static int lid_slept_closed;
+
 FALLBACK_IMPLEMENTATION void PLAT_initLid(void) {}
 FALLBACK_IMPLEMENTATION int PLAT_lidChanged(int *state) { return 0; }
+FALLBACK_IMPLEMENTATION int PLAT_lidIsOpen(void) { return 1; }
 
 ///////////////////////////////
 
@@ -3826,8 +3831,13 @@ FALLBACK_IMPLEMENTATION void PLAT_pollInput(void)
 		}
 	}
 
-	if (lid.has_lid && PLAT_lidChanged(NULL) && !lid.is_open)
-		pwr.requested_sleep = 1;
+	if (lid.has_lid && PLAT_lidChanged(NULL)) {
+		int guard = pwr.resume_tick && SDL_GetTicks() - pwr.resume_tick < 1000;
+		if (lid.is_open)
+			lid_slept_closed = 0;
+		else if (!lid_slept_closed && !guard)
+			pwr.requested_lid_sleep = 1;
+	}
 }
 FALLBACK_IMPLEMENTATION int PLAT_shouldWake(void)
 {
@@ -4105,8 +4115,10 @@ void PWR_init(void)
 	pwr.can_autosleep = 1;
 
 	pwr.requested_sleep = 0;
+	pwr.requested_lid_sleep = 0;
 	pwr.requested_wake = 0;
 	pwr.resume_tick = 0;
+	lid_slept_closed = 0;
 
 	SDL_AtomicSet(&pwr.charge, PWR_LOW_CHARGE);
 
@@ -4194,13 +4206,29 @@ void PWR_update(int *_dirty, int *_show_setting, PWR_callback_t before_sleep, PW
 	if (screenOffDelay == 0 || (now - last_input_at >= screenOffDelay && PWR_preventAutosleep()))
 		last_input_at = now;
 
-	if (pwr.requested_sleep ||
+	if (pwr.requested_lid_sleep) {
+		pwr.requested_lid_sleep = 0;
+		/* Current switch state, not a stale close still in the queue. */
+		if (lid.has_lid && !PLAT_lidIsOpen()) {
+			if (before_sleep)
+				before_sleep();
+			PWR_sleepNow();
+			if (!PLAT_lidIsOpen())
+				lid_slept_closed = 1;
+			if (after_sleep)
+				after_sleep();
+			last_input_at = now = SDL_GetTicks();
+			power_pressed_at = 0;
+			dirty = 1;
+		}
+	}
+	else if (pwr.requested_sleep ||
 		(screenOffDelay > 0 && now - last_input_at >= screenOffDelay))
 	{
 		pwr.requested_sleep = 0;
 		if (before_sleep)
 			before_sleep();
-		/* Lid and idle timeout: screen + radios off, wait for wake.
+		/* Screen timeout stays a hybrid wait. Lid close uses mem above.
 		 * Power button uses mem below. */
 		PWR_sleep();
 		if (after_sleep)

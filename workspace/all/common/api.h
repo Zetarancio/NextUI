@@ -493,6 +493,7 @@ extern LID_Context lid;
 
 void PLAT_initLid(void);
 int PLAT_lidChanged(int* state);
+int PLAT_lidIsOpen(void);
 void PLAT_getCPUTemp();
 void PLAT_getCPUSpeed();
 void PLAT_getGPUUsage();

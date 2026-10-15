@@ -123,6 +123,19 @@ int PLAT_lidChanged(int *state)
 	return changed;
 }
 
+int PLAT_lidIsOpen(void)
+{
+	unsigned char sw[(SW_MAX / 8) + 1];
+
+	if (!lid.has_lid || lid_fd < 0)
+		return 1;
+	memset(sw, 0, sizeof(sw));
+	if (ioctl(lid_fd, EVIOCGSW(sizeof(sw)), sw) < 0)
+		return 1;
+	lid.is_open = lid_open_from_sw(sw, sizeof(sw));
+	return lid.is_open;
+}
+
 int PLAT_shouldWake(void)
 {
 	int lid_open = 1;
