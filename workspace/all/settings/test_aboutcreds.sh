@@ -51,5 +51,11 @@ if awk '
 fi
 grep -q 'snap.ssh_password = Zlyme_sshPasswordDisplay();' "$settings" \
 	|| fail "About does not read the SSH password on entry"
+grep -q 'zlyme_about_syncthing_read(' "$settings" \
+	|| fail "About does not ask the Syncthing helper on entry"
+if grep -q 'zlyme_about_syncthing_account(' "$settings" \
+	|| grep -q 'read_about_file(std::string(SDCARD_PATH) + "/.config/syncthing/config.xml")' "$settings"; then
+	fail "About still parses Syncthing XML itself"
+fi
 
 echo "about creds ok"

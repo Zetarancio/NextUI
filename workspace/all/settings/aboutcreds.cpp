@@ -1,7 +1,11 @@
 #include "aboutcreds.hpp"
 
+#include <cerrno>
 #include <cctype>
+#include <fcntl.h>
 #include <string>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace {
 
@@ -28,48 +32,23 @@ std::string upper_hex(std::string s)
 // the user chose later.
 const char kSambaDefaultNt[] = "2FCB1348153EAC6843A3DF162CEFD64F";
 
-std::string gui_span(const std::string &xml)
+std::string nth_line(const std::string &text, int which)
 {
-	const std::string open = "<gui";
-	const std::string close = "</gui>";
-	size_t start = xml.find(open);
-	if (start == std::string::npos)
+	size_t start = 0;
+	int seen = 0;
+	while (seen < which && start <= text.size()) {
+		size_t nl = text.find('\n', start);
+		if (nl == std::string::npos)
+			return {};
+		start = nl + 1;
+		seen++;
+	}
+	if (start > text.size())
 		return {};
-	size_t end = xml.find(close, start);
-	if (end == std::string::npos)
-		return {};
-	return xml.substr(start, end - start);
-}
-
-std::string tag_text(const std::string &span, const char *tag)
-{
-	const std::string open = std::string("<") + tag + ">";
-	const std::string close = std::string("</") + tag + ">";
-	size_t start = span.find(open);
-	if (start == std::string::npos)
-		return {};
-	start += open.size();
-	size_t end = span.find(close, start);
-	if (end == std::string::npos)
-		return {};
-	return span.substr(start, end - start);
-}
-
-bool is_bcrypt(const std::string &s)
-{
-	if (s.size() < 4 + 1 + 1 + 50)
-		return false;
-	if (s.compare(0, 4, "$2a$") != 0 && s.compare(0, 4, "$2b$") != 0 &&
-	    s.compare(0, 4, "$2y$") != 0)
-		return false;
-	size_t i = 4;
-	if (!std::isdigit(static_cast<unsigned char>(s[i])))
-		return false;
-	while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i])))
-		i++;
-	if (i >= s.size() || s[i] != '$')
-		return false;
-	return s.size() - (i + 1) >= 50;
+	size_t nl = text.find('\n', start);
+	if (nl == std::string::npos)
+		return text.substr(start);
+	return text.substr(start, nl - start);
 }
 
 } // namespace
@@ -128,23 +107,87 @@ std::string zlyme_about_samba_password(const std::string &account_file)
 	return "(changed)";
 }
 
-std::string zlyme_about_syncthing_account(const std::string &config_xml)
+std::string zlyme_about_syncthing_account_label(const std::string &line)
 {
-	std::string user = tag_text(gui_span(config_xml), "user");
-	if (user.empty() || is_bcrypt(user))
+	if (line.empty() || line == "(unavailable)")
 		return "(unavailable)";
-	if (user.find('\n') != std::string::npos || user.find('\r') != std::string::npos)
+	if (line.find('\n') != std::string::npos || line.find('\r') != std::string::npos)
 		return "(unavailable)";
-	return user;
+	if (line.find('<') != std::string::npos || line.find('>') != std::string::npos)
+		return "(unavailable)";
+	if (line.find("$2a$") != std::string::npos || line.find("$2b$") != std::string::npos ||
+	    line.find("$2y$") != std::string::npos)
+		return "(unavailable)";
+	if (line.size() > 128)
+		return "(unavailable)";
+	return line;
 }
 
-std::string zlyme_about_syncthing_password(const std::string &config_xml)
+std::string zlyme_about_syncthing_password_label(const std::string &line)
 {
-	std::string pass = tag_text(gui_span(config_xml), "password");
-	// A salted bcrypt value cannot be matched to "zlyme" by comparing
-	// the text with a stored hash. Syncthing is not started from About.
-	// A present hash is reported as set. Anything else is not shown.
-	if (is_bcrypt(pass))
+	if (line == "(set)")
 		return "(set)";
 	return "(unavailable)";
+}
+
+void zlyme_about_syncthing_read(const std::string &config_path, const std::string &helper,
+	std::string &account, std::string &password)
+{
+	account = "(unavailable)";
+	password = "(unavailable)";
+	if (helper.empty() || config_path.empty())
+		return;
+	int fds[2];
+	if (pipe(fds) != 0)
+		return;
+	pid_t pid = fork();
+	if (pid < 0) {
+		close(fds[0]);
+		close(fds[1]);
+		return;
+	}
+	if (pid == 0) {
+		if (dup2(fds[1], STDOUT_FILENO) < 0)
+			_exit(127);
+		close(fds[0]);
+		close(fds[1]);
+		int devnull = open("/dev/null", O_WRONLY);
+		if (devnull >= 0) {
+			if (dup2(devnull, STDERR_FILENO) < 0)
+				_exit(127);
+			close(devnull);
+		}
+		execl(helper.c_str(), helper.c_str(), "about", config_path.c_str(),
+			static_cast<char *>(nullptr));
+		_exit(127);
+	}
+	close(fds[1]);
+	std::string out;
+	char buf[256];
+	for (;;) {
+		ssize_t n = read(fds[0], buf, sizeof buf);
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			break;
+		}
+		if (n == 0)
+			break;
+		out.append(buf, static_cast<size_t>(n));
+	}
+	close(fds[0]);
+	int status = 0;
+	for (;;) {
+		pid_t got = waitpid(pid, &status, 0);
+		if (got < 0) {
+			if (errno == EINTR)
+				continue;
+			return;
+		}
+		break;
+	}
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		return;
+	account = zlyme_about_syncthing_account_label(nth_line(out, 0));
+	password = zlyme_about_syncthing_password_label(nth_line(out, 1));
 }

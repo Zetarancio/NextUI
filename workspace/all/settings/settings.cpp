@@ -272,9 +272,13 @@ namespace {
         snap.samba_account = "zlyme";
         snap.samba_password = zlyme_about_samba_password(
             read_about_file(std::string(SDCARD_PATH) + "/.config/zlyme/samba.account"));
-        std::string xml = read_about_file(std::string(SDCARD_PATH) + "/.config/syncthing/config.xml");
-        snap.syncthing_account = zlyme_about_syncthing_account(xml);
-        snap.syncthing_password = zlyme_about_syncthing_password(xml);
+        const char *gui_env = std::getenv("ZLYME_SYNCTHING_GUI");
+        std::string gui = (gui_env && *gui_env) ? gui_env : "/usr/sbin/zlyme-syncthing-gui";
+        zlyme_about_syncthing_read(
+            std::string(SDCARD_PATH) + "/.config/syncthing/config.xml",
+            gui,
+            snap.syncthing_account,
+            snap.syncthing_password);
         snap.ip = wlan_ip();
     }
 
