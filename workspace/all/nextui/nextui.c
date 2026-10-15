@@ -16,6 +16,7 @@
 #include "config.h"
 #include "zlyme_prefs.h"
 #include "launch_queue.h"
+#include "zlyme_thumbpath.h"
 #include <sys/resource.h>
 #include <pthread.h>
 #include <sys/wait.h>
@@ -3812,21 +3813,27 @@ int main (int argc, char *argv[]) {
 				// load game thumbnails
 				if (total > 0) {
 					if(CFG_getShowGameArt()) {
-						char thumbpath[1024];
-						snprintf(thumbpath, sizeof(thumbpath), "%s/.media/%s.png", rompath, res_copy);
+						char thumbpath[MAX_PATH];
+						had_thumb = 0;
+						/* .png, then .jpg, then .jpeg. The loader is unchanged. */
+						if (!zlyme_game_art_path(thumbpath, sizeof(thumbpath), rompath, res_copy))
+							thumbpath[0] = '\0';
 						/* A BBS .p8.png is the cartridge and its label.
 						 * .media above wins. temp-* is not a finished cart.
 						 * Any other PNG is left alone. */
-						if (!exists(thumbpath) && entry->path
+						if (thumbpath[0] && !exists(thumbpath) && entry->path
 							&& strstr(entry->path, "/Pico-8-native/bbs/")
 							&& suffixMatch(".p8.png", entry->path)) {
 							const char *base = strrchr(entry->path, '/');
 							base = base ? base + 1 : entry->path;
-							if (strncmp(base, "temp-", 5) != 0)
-								snprintf(thumbpath, sizeof(thumbpath), "%s", entry->path);
+							if (strncmp(base, "temp-", 5) != 0) {
+								int wrote = snprintf(thumbpath, sizeof(thumbpath), "%s", entry->path);
+								if (wrote < 0 || (size_t)wrote >= sizeof(thumbpath))
+									thumbpath[0] = '\0';
+							}
 						}
-						had_thumb = 0;
-						startLoadThumb(thumbpath, onThumbLoaded, NULL);
+						if (thumbpath[0])
+							startLoadThumb(thumbpath, onThumbLoaded, NULL);
 						int max_w = (int)(screen->w - (screen->w * CFG_getGameArtWidth()));
 						int max_h = (int)(screen->h * 0.6);
 						int new_w = max_w;
