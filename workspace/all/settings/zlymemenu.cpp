@@ -1,6 +1,7 @@
 #include "zlymemenu.hpp"
 #include "keyboardprompt.hpp"
 #include "oneshot.hpp"
+#include "sambasettings.hpp"
 
 #include <cerrno>
 #include <cstdio>
@@ -402,108 +403,27 @@ static void Zlyme_appendProxyItem(std::vector<AbstractMenuItem *> &items)
 static int auth_run(const std::vector<std::string> &args, const std::string *input,
 	std::string *out_text, std::string *err_text)
 {
-	int inp[2] = {-1, -1};
-	int outp[2] = {-1, -1};
-	int errp[2] = {-1, -1};
-	if (pipe(outp) != 0)
-		return -1;
-	if (pipe(errp) != 0) {
-		close(outp[0]);
-		close(outp[1]);
-		return -1;
-	}
-	if (input && pipe(inp) != 0) {
-		close(outp[0]);
-		close(outp[1]);
-		close(errp[0]);
-		close(errp[1]);
-		return -1;
-	}
-	pid_t pid = fork();
-	if (pid < 0) {
-		close(outp[0]);
-		close(outp[1]);
-		close(errp[0]);
-		close(errp[1]);
-		if (input) {
-			close(inp[0]);
-			close(inp[1]);
-		}
-		return -1;
-	}
-	if (pid == 0) {
-		if (input)
-			dup2(inp[0], STDIN_FILENO);
-		dup2(outp[1], STDOUT_FILENO);
-		dup2(errp[1], STDERR_FILENO);
-		if (input) {
-			close(inp[0]);
-			close(inp[1]);
-		}
-		close(outp[0]);
-		close(outp[1]);
-		close(errp[0]);
-		close(errp[1]);
-		std::vector<char *> argv;
-		argv.push_back(const_cast<char *>("zlyme-ssh-auth"));
-		for (const auto &arg : args)
-			argv.push_back(const_cast<char *>(arg.c_str()));
-		argv.push_back(nullptr);
-		execvp("zlyme-ssh-auth", argv.data());
-		_exit(127);
-	}
-	if (input) {
-		close(inp[0]);
-		const char *p = input->data();
-		size_t left = input->size();
-		while (left > 0) {
-			ssize_t n = write(inp[1], p, left);
-			if (n < 0) {
-				if (errno == EINTR)
-					continue;
-				break;
-			}
-			p += n;
-			left -= (size_t)n;
-		}
-		close(inp[1]);
-	}
-	close(outp[1]);
-	close(errp[1]);
-	auto read_fd = [](int fd) {
-		std::string text;
-		char buf[256];
-		for (;;) {
-			ssize_t n = read(fd, buf, sizeof(buf));
-			if (n < 0) {
-				if (errno == EINTR)
-					continue;
-				break;
-			}
-			if (n == 0)
-				break;
-			text.append(buf, buf + n);
-		}
-		return text;
-	};
-	if (out_text)
-		*out_text = read_fd(outp[0]);
-	else
-		read_fd(outp[0]);
-	close(outp[0]);
-	if (err_text)
-		*err_text = read_fd(errp[0]);
-	else
-		read_fd(errp[0]);
-	close(errp[0]);
-	int status = 0;
-	while (waitpid(pid, &status, 0) < 0) {
-		if (errno != EINTR)
-			return -1;
-	}
-	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-		return -1;
-	return 0;
+	return zlyme_tool_exec("zlyme-ssh-auth", args, input, out_text, err_text);
+}
+
+static bool samba_account_present()
+{
+	std::ifstream in("/storage/.config/zlyme/samba.account");
+	return in.good();
+}
+
+static void samba_apply(bool on)
+{
+	ctl_set("samba", on ? "on" : "off");
+	std::string out;
+	std::string err;
+	int rc = zlyme_tool_exec("/etc/init.d/S70samba",
+		{on ? "start" : "stop"}, nullptr, &out, &err);
+	bool init_ok = rc == 0;
+	ctl_set("samba", zlyme_samba_flag_after(on, init_ok) ? "on" : "off");
+	std::string msg = zlyme_samba_service_message(on, init_ok, out + err);
+	if (!msg.empty())
+		MenuList::showOverlay(msg, OverlayDismissMode::DismissOnA);
 }
 
 static void auth_trim_err(std::string *err, const std::string &message)
@@ -594,12 +514,43 @@ void Zlyme_appendNetworkItems(std::vector<AbstractMenuItem *> &items)
 			}
 			return NoOp;
 		}});
+	auto *samba_prompt = new KeyboardPrompt("Samba password", [](AbstractMenuItem &item) -> InputReactionHint {
+		std::string err;
+		std::vector<std::string> args;
+		std::string stdin_text;
+		if (!zlyme_samba_password_command(item.getName(), &args, &stdin_text, &err)) {
+			MenuList::showOverlay(err.empty() ? "Enter a Samba password." : err,
+				OverlayDismissMode::DismissOnA);
+			return NoOp;
+		}
+		std::string message;
+		int rc = zlyme_tool_exec("zlyme-samba-auth", args, &stdin_text, nullptr, &message);
+		if (rc != 0) {
+			auth_trim_err(&err, message);
+			MenuList::showOverlay(err.empty() ? "Could not save Samba password." : err,
+				OverlayDismissMode::DismissOnA);
+			return NoOp;
+		}
+		return Exit;
+	});
+
 	items.push_back(new MenuItem{ListItemType::Generic, "Samba",
 		"File share of /storage. Applies immediately.",
 		on_off_v, on_off,
 		[]() -> std::any { return ctl_on("samba"); },
-		[](const std::any &v) { service_apply("samba", "/etc/init.d/S70samba", std::any_cast<bool>(v)); },
-		[]() { service_apply("samba", "/etc/init.d/S70samba", false); }});
+		[](const std::any &v) { samba_apply(std::any_cast<bool>(v)); },
+		[]() { samba_apply(false); }});
+	items.push_back(new TextInputMenuItem{"Samba Password",
+		"Share login. An empty password is left unchanged.",
+		[]() -> std::any {
+			return zlyme_samba_password_label(samba_account_present());
+		},
+		[samba_prompt](AbstractMenuItem &item) -> InputReactionHint {
+			samba_prompt->setInitialText("");
+			item.defer(true);
+			return NoOp;
+		},
+		samba_prompt});
 	items.push_back(new MenuItem{ListItemType::Generic, "Syncthing",
 		"Web UI on :8384. Applies immediately.",
 		on_off_v, on_off,
