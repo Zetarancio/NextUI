@@ -33,6 +33,7 @@ extern "C"
 #include "fnbuttonmenu.hpp"
 #include "zlymemenu.hpp"
 #include "zlymejoystick.hpp"
+#include "aboutcreds.hpp"
 
 #define BUSYBOX_STOCK_VERSION "1.27.2"
 
@@ -243,6 +244,47 @@ namespace {
             "ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1"));
         return s.empty() ? "not connected" : s;
     }
+
+    static std::string read_about_file(const std::string &path)
+    {
+        std::ifstream in(path);
+        if (!in)
+            return {};
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    }
+
+    struct AboutSnap {
+        std::string ssh_account{"root"};
+        std::string ssh_password{"(unavailable)"};
+        std::string samba_account{"zlyme"};
+        std::string samba_password{"(unavailable)"};
+        std::string syncthing_account{"(unavailable)"};
+        std::string syncthing_password{"(unavailable)"};
+        std::string ip{"not connected"};
+    };
+
+    static void about_refresh(AboutSnap &snap)
+    {
+        snap.ssh_account = "root";
+        snap.ssh_password = Zlyme_sshPasswordDisplay();
+        snap.samba_account = "zlyme";
+        snap.samba_password = zlyme_about_samba_password(
+            read_about_file(std::string(SDCARD_PATH) + "/.config/zlyme/samba.account"));
+        std::string xml = read_about_file(std::string(SDCARD_PATH) + "/.config/syncthing/config.xml");
+        snap.syncthing_account = zlyme_about_syncthing_account(xml);
+        snap.syncthing_password = zlyme_about_syncthing_password(xml);
+        snap.ip = wlan_ip();
+    }
+
+    class AboutMenu : public MenuList {
+        std::shared_ptr<AboutSnap> snap;
+    public:
+        AboutMenu(std::vector<AbstractMenuItem *> items, std::shared_ptr<AboutSnap> snap)
+            : MenuList(MenuItemType::Fixed, "About", std::move(items)), snap(std::move(snap)) {}
+        void onShow() override { about_refresh(*snap); }
+    };
 
     class DeviceInfo {
     public:
@@ -1044,6 +1086,7 @@ int main(int argc, char *argv[])
                 "reverting to clean stock firmware.",
                 OverlayDismissMode::DismissOnA);
 
+        auto about = std::make_shared<AboutSnap>();
         std::vector<AbstractMenuItem*> aboutItems = {
             new StaticMenuItem{ListItemType::Generic, "Version", "Installed Zlyme version.",
             []() -> std::any { return product_version_token(); }},
@@ -1071,16 +1114,24 @@ int main(int argc, char *argv[])
             new StaticMenuItem{ListItemType::Generic, "Kernel", "uname -r",
             []() -> std::any { return kernel_version(); }},
             new StaticMenuItem{ListItemType::Generic, "SSH Account", "OpenSSH login name.",
-            []() -> std::any { return std::string("root"); }},
+            [about]() -> std::any { return about->ssh_account; }},
             new StaticMenuItem{ListItemType::Generic, "SSH Password", "The password currently set for root.",
-            []() -> std::any { return Zlyme_sshPasswordDisplay(); }},
+            [about]() -> std::any { return about->ssh_password; }},
+            new StaticMenuItem{ListItemType::Generic, "Samba Account", "Storage share login.",
+            [about]() -> std::any { return about->samba_account; }},
+            new StaticMenuItem{ListItemType::Generic, "Samba Password", "Initial password, or whether it was changed.",
+            [about]() -> std::any { return about->samba_password; }},
+            new StaticMenuItem{ListItemType::Generic, "Syncthing Account", "Web UI login.",
+            [about]() -> std::any { return about->syncthing_account; }},
+            new StaticMenuItem{ListItemType::Generic, "Syncthing Password", "Set in Syncthing. The hash is not shown.",
+            [about]() -> std::any { return about->syncthing_password; }},
             new StaticMenuItem{ListItemType::Generic, "IP", "wlan0 IPv4 when associated.",
-            []() -> std::any { return wlan_ip(); }},
+            [about]() -> std::any { return about->ip; }},
             new StaticMenuItem{ListItemType::Generic, "BusyBox", "Init and core utilities.",
             [&]() -> std::any { return bbver; }
             },
         };
-        auto aboutMenu = new MenuList(MenuItemType::Fixed, "About", aboutItems);
+        auto aboutMenu = new AboutMenu(aboutItems, about);
 
         MenuList *buttonMenu = buildFnButtonMenu(); // nullptr if this device has none
 
