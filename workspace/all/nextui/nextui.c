@@ -17,6 +17,7 @@
 #include "zlyme_prefs.h"
 #include "launch_queue.h"
 #include "zlyme_thumbpath.h"
+#include "zlyme_artbook.h"
 #include <sys/resource.h>
 #include <pthread.h>
 #include <sys/wait.h>
@@ -420,6 +421,28 @@ static void Directory_free(Directory* self) {
 	EntryArray_free(self->entries);
 	IntArray_free(self->alphas);
 	free(self);
+}
+
+static int zlyme_folder_artbook(char *out, size_t n, const char *folder, int list_mode)
+{
+	const char *root = getenv("ZLYME_ARTBOOK_DIR");
+	char emu[MAX_PATH];
+
+	if (!root || !root[0])
+		root = "/usr/share/nextui/artbook";
+	if (!folder || !folder[0])
+		return 0;
+	if (exactMatch((char *)folder, FAUX_RECENT_PATH) || suffixMatch("/Recently Played", folder))
+		return zlyme_artbook_path(out, n, root, list_mode, "Recently Played");
+	if (exactMatch((char *)folder, COLLECTIONS_PATH) || suffixMatch("/Collections", folder))
+		return zlyme_artbook_path(out, n, root, list_mode, "Collections");
+	if (exactMatch((char *)folder, TOOLS_PATH) || prefixMatch(TOOLS_PATH, folder))
+		return zlyme_artbook_path(out, n, root, list_mode, "Tools");
+	emu[0] = '\0';
+	getEmuName((char *)folder, emu);
+	if (!emu[0] || strchr(emu, '/') || strchr(emu, ' '))
+		return 0;
+	return zlyme_artbook_path(out, n, root, list_mode, emu);
 }
 
 static void replace_top_directory(void)
@@ -3905,9 +3928,14 @@ int main (int argc, char *argv[]) {
 						else if (entry->type == ENTRY_ROM)
 							snprintf(tmppath, sizeof(tmppath), "%s/.media/bglist.png", folderBgPath);
 						if(!exists(tmppath)) {
-							// Safeguard: If no background is available, still render the text to leave the user a way out
+							/* User .media wins. Then the user's bg.png.
+							 * ArtBook is the stock image when neither exists.
+							 * Names stay visible so a busy wallpaper does not hide the list. */
 							list_show_entry_names = true;
-							snprintf(tmppath, sizeof(tmppath), defaultBgPath, folderBgPath);
+							if (exists(defaultBgPath))
+								snprintf(tmppath, sizeof(tmppath), "%s", defaultBgPath);
+							else if (!zlyme_folder_artbook(tmppath, sizeof(tmppath), newBg, entry->type == ENTRY_ROM) || !exists(tmppath))
+								snprintf(tmppath, sizeof(tmppath), "%s", defaultBgPath);
 						}
 						startLoadFolderBackground(tmppath, onBackgroundLoaded, NULL);
 					}
