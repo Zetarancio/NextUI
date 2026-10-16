@@ -1565,6 +1565,12 @@ void Zlyme_appendGameCleanup(std::vector<AbstractMenuItem *> &items)
 			(void)item;
 			return cleanup_button("orphan-media", "No orphan boxart", "Delete %d orphan images?");
 		}});
+	items.push_back(new MenuItem{ListItemType::Button, "Orphan game preferences",
+		"Remove per-ROM governor and emulator choices whose ROM is missing.\nFolder and system choices stay. The second card stays while it is out.",
+		[](AbstractMenuItem &item) -> InputReactionHint {
+			(void)item;
+			return cleanup_button("orphan-prefs", "No orphan preferences", "Delete %d orphan game preferences?");
+		}});
 	items.push_back(new MenuItem{ListItemType::Button, "Clear Recents",
 		"Clear the Recently Played list.",
 		[](AbstractMenuItem &item) -> InputReactionHint {
