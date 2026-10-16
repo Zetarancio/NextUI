@@ -488,7 +488,7 @@ void Zlyme_appendNetworkItems(std::vector<AbstractMenuItem *> &items)
 
 	Zlyme_appendProxyItem(items);
 	items.push_back(new MenuItem{ListItemType::Generic, "SSH",
-		"OpenSSH with SFTP. Applies immediately.",
+		"OpenSSH with SFTP. Runs while Wi-Fi is on.",
 		on_off_v, on_off,
 		[]() -> std::any { return ctl_on("ssh"); },
 		[](const std::any &v) { service_apply("ssh", "/etc/init.d/S50sshd", std::any_cast<bool>(v)); },
@@ -535,7 +535,7 @@ void Zlyme_appendNetworkItems(std::vector<AbstractMenuItem *> &items)
 	});
 
 	items.push_back(new MenuItem{ListItemType::Generic, "Samba",
-		"File share of /storage. Applies immediately.",
+		"File share of /storage. Runs while Wi-Fi is on.",
 		on_off_v, on_off,
 		[]() -> std::any { return ctl_on("samba"); },
 		[](const std::any &v) { samba_apply(std::any_cast<bool>(v)); },
@@ -552,7 +552,7 @@ void Zlyme_appendNetworkItems(std::vector<AbstractMenuItem *> &items)
 		},
 		samba_prompt});
 	items.push_back(new MenuItem{ListItemType::Generic, "Syncthing",
-		"Web UI on :8384. Applies immediately.",
+		"Web UI on :8384. Runs while Wi-Fi is on.",
 		on_off_v, on_off,
 		[]() -> std::any { return ctl_on("syncthing"); },
 		[](const std::any &v) { service_apply("syncthing", "/etc/init.d/S75syncthing", std::any_cast<bool>(v)); },
