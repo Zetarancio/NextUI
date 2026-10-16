@@ -423,26 +423,51 @@ static void Directory_free(Directory* self) {
 	free(self);
 }
 
-static int zlyme_folder_artbook(char *out, size_t n, const char *folder, int list_mode)
+static const char *zlyme_artbook_root(void)
 {
 	const char *root = getenv("ZLYME_ARTBOOK_DIR");
-	char emu[MAX_PATH];
 
 	if (!root || !root[0])
-		root = "/usr/share/nextui/artbook";
+		return "/usr/share/nextui/artbook";
+	return root;
+}
+
+/* Right-hand art column. Names scroll inside the space to its left. */
+#define ZLYME_ART_SAFE_X 320
+static int zlyme_art_reserve = 0;
+
+static int zlyme_system_artbook(char *out, size_t n, const char *folder)
+{
+	char emu[MAX_PATH];
+
 	if (!folder || !folder[0])
 		return 0;
 	if (exactMatch((char *)folder, FAUX_RECENT_PATH) || suffixMatch("/Recently Played", folder))
-		return zlyme_artbook_path(out, n, root, list_mode, "Recently Played");
+		return 0;
 	if (exactMatch((char *)folder, COLLECTIONS_PATH) || suffixMatch("/Collections", folder))
-		return zlyme_artbook_path(out, n, root, list_mode, "Collections");
+		return 0;
 	if (exactMatch((char *)folder, TOOLS_PATH) || prefixMatch(TOOLS_PATH, folder))
-		return zlyme_artbook_path(out, n, root, list_mode, "Tools");
+		return 0;
 	emu[0] = '\0';
 	getEmuName((char *)folder, emu);
-	if (!emu[0] || strchr(emu, '/') || strchr(emu, ' '))
+	return zlyme_artbook_system(out, n, zlyme_artbook_root(), emu);
+}
+
+static int zlyme_tool_artbook(char *out, size_t n, const char *pak_path)
+{
+	const char *base;
+	char name[MAX_PATH];
+	size_t len;
+
+	if (!pak_path || !pak_path[0])
 		return 0;
-	return zlyme_artbook_path(out, n, root, list_mode, emu);
+	base = strrchr(pak_path, '/');
+	base = base ? base + 1 : pak_path;
+	snprintf(name, sizeof(name), "%s", base);
+	len = strlen(name);
+	if (len > 4 && strcmp(name + len - 4, ".pak") == 0)
+		name[len - 4] = '\0';
+	return zlyme_artbook_tool(out, n, zlyme_artbook_root(), name);
 }
 
 static void replace_top_directory(void)
@@ -2651,7 +2676,9 @@ int BGLoadWorker(void* unused) {
         if (access(task->imagePath, F_OK) == 0) {
             SDL_Surface* image = IMG_Load(task->imagePath);
             if (image) {
-                SDL_Surface* imageRGBA = SDL_ConvertSurfaceFormat(image, screen->format->format, 0);
+                /* ARGB8888 keeps the PNG alpha. The screen format is the
+                 * same, but a future RGB screen must not flatten this. */
+                SDL_Surface* imageRGBA = SDL_ConvertSurfaceFormat(image, SDL_PIXELFORMAT_ARGB8888, 0);
                 SDL_FreeSurface(image);
                 result = imageRGBA;
             }
@@ -3917,34 +3944,54 @@ int main (int argc, char *argv[]) {
 
 				if (zlyme_skip_folder_bg) {
 					list_show_entry_names = true;
-				} else if(((entry->type == ENTRY_DIR || entry->type == ENTRY_ROM) && CFG_getRomsUseFolderBackground())) {
-					char *newBg = entry->type == ENTRY_DIR ? entry->path:rompath;
+				} else if(((entry->type == ENTRY_DIR || entry->type == ENTRY_ROM || entry->type == ENTRY_PAK) && CFG_getRomsUseFolderBackground())) {
+					char *newBg = entry->type == ENTRY_DIR ? entry->path : (entry->type == ENTRY_PAK ? entry->path : rompath);
 					if((strcmp(newBg, folderBgPath) != 0 || lastType != entry->type) && sizeof(folderBgPath) != 1) {
 						lastType = entry->type;
 						char tmppath[512];
+						int artbook = 0;
+						tmppath[0] = '\0';
 						strncpy(folderBgPath, newBg, sizeof(folderBgPath) - 1);
+						folderBgPath[sizeof(folderBgPath) - 1] = '\0';
 						if (entry->type == ENTRY_DIR)
 							snprintf(tmppath, sizeof(tmppath), "%s/.media/bg.png", folderBgPath);
 						else if (entry->type == ENTRY_ROM)
 							snprintf(tmppath, sizeof(tmppath), "%s/.media/bglist.png", folderBgPath);
+						else
+							snprintf(tmppath, sizeof(tmppath), "%s/.media/bg.png", folderBgPath);
 						if(!exists(tmppath)) {
-							/* User .media wins. Then the user's bg.png.
-							 * ArtBook is the stock image when neither exists.
-							 * Names stay visible so a busy wallpaper does not hide the list. */
 							list_show_entry_names = true;
+							tmppath[0] = '\0';
 							if (exists(defaultBgPath))
 								snprintf(tmppath, sizeof(tmppath), "%s", defaultBgPath);
-							else if (!zlyme_folder_artbook(tmppath, sizeof(tmppath), newBg, entry->type == ENTRY_ROM) || !exists(tmppath))
-								snprintf(tmppath, sizeof(tmppath), "%s", defaultBgPath);
+							else if (entry->type == ENTRY_DIR && zlyme_system_artbook(tmppath, sizeof(tmppath), newBg) && exists(tmppath))
+								artbook = 1;
+							else if (entry->type == ENTRY_PAK && zlyme_tool_artbook(tmppath, sizeof(tmppath), entry->path) && exists(tmppath))
+								artbook = 1;
+							else
+								tmppath[0] = '\0';
 						}
-						startLoadFolderBackground(tmppath, onBackgroundLoaded, NULL);
+						zlyme_art_reserve = artbook ? ZLYME_ART_SAFE_X : 0;
+						if (tmppath[0])
+							startLoadFolderBackground(tmppath, onBackgroundLoaded, NULL);
+						else {
+							SDL_LockMutex(bgMutex);
+							if (folderbgbmp) {
+								SDL_FreeSurface(folderbgbmp);
+								folderbgbmp = NULL;
+							}
+							folderbgchanged = 1;
+							SDL_UnlockMutex(bgMutex);
+						}
 					}
 				}
 				else if(strcmp(defaultBgPath, folderBgPath) != 0 && exists(defaultBgPath)) {
+					zlyme_art_reserve = 0;
 					strncpy(folderBgPath, defaultBgPath, sizeof(folderBgPath) - 1);
 					startLoadFolderBackground(defaultBgPath, onBackgroundLoaded, NULL);
 				}
 				else {
+					zlyme_art_reserve = 0;
 					// Safeguard: If no background is available, still render the text to leave the user a way out
 					list_show_entry_names = true;
 				}
@@ -4025,6 +4072,8 @@ int main (int argc, char *argv[]) {
 						char* entry_name = entry->name;
 						char* entry_unique = entry->unique;
 						int available_width = MAX(0,(had_thumb ? ox + SCALE1(BUTTON_MARGIN) : screen->w - SCALE1(BUTTON_MARGIN)) - SCALE1(PADDING * 2));
+						if (zlyme_art_reserve > 0)
+							available_width = MIN(available_width, MAX(0, zlyme_art_reserve - SCALE1(PADDING)));
 						bool row_is_selected = (j == selected_row);
 						bool row_is_top = (i == top->start);
 						bool row_has_moved = (previous_row != selected_row || previous_depth != stack->count);
@@ -4300,6 +4349,8 @@ int main (int argc, char *argv[]) {
 					}
 
 					int available_width = (had_thumb ? ox + SCALE1(BUTTON_MARGIN) : screen->w - SCALE1(BUTTON_MARGIN)) - SCALE1(PADDING * 2);
+					if (zlyme_art_reserve > 0)
+						available_width = MIN(available_width, MAX(0, zlyme_art_reserve - SCALE1(PADDING)));
 					if (top->selected == top->start && !had_thumb) available_width -= ow;
 
 					SDL_Color text_color = uintToColour(THEME_COLOR5_255);

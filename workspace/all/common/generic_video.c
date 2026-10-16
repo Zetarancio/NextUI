@@ -1312,6 +1312,10 @@ void PLAT_drawOnLayer(SDL_Surface *inputSurface, int x, int y, int w, int h, flo
     }
 
     SDL_SetTextureColorMod(tempTexture, r, g, b);
+    /* Layer 1 is cleared to the theme color. Straight alpha lets a
+     * transparent ArtBook overlay show that color instead of black. */
+    if (layer == 1)
+        SDL_SetTextureBlendMode(tempTexture, SDL_BLENDMODE_BLEND);
 
     // Aspect ratio handling
     SDL_Rect srcRect = { 0, 0, inputSurface->w, inputSurface->h };

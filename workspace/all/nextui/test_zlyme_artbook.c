@@ -17,20 +17,17 @@ int main(void)
 {
 	char out[256];
 
-	expect(zlyme_artbook_path(out, sizeof(out), "/usr/share/nextui/artbook", 0, "GB") == 1, "gb system");
+	expect(zlyme_artbook_system(out, sizeof(out), "/usr/share/nextui/artbook", "GB") == 1, "gb");
 	expect(strcmp(out, "/usr/share/nextui/artbook/system/(GB).png") == 0, out);
-	expect(zlyme_artbook_path(out, sizeof(out), "/usr/share/nextui/artbook", 1, "GBA") == 1, "gba list");
-	expect(strcmp(out, "/usr/share/nextui/artbook/list/(GBA)-list.png") == 0, out);
-	expect(zlyme_artbook_path(out, sizeof(out), "/art", 0, "Tools") == 1, "tools");
-	expect(strcmp(out, "/art/system/Tools.png") == 0, out);
-	expect(zlyme_artbook_path(out, sizeof(out), "/art", 1, "Recently Played") == 1, "recents list");
-	expect(strcmp(out, "/art/list/Recently Played-list.png") == 0, out);
-	expect(zlyme_artbook_path(out, sizeof(out), "/art", 0, "Collections") == 1, "collections");
-	expect(strcmp(out, "/art/system/Collections.png") == 0, out);
-	expect(zlyme_artbook_path(out, sizeof(out), "/art", 0, "../GB") == 0, "dotdot");
-	expect(zlyme_artbook_path(out, sizeof(out), "/art", 0, "GB/FC") == 0, "slash");
-	expect(zlyme_artbook_path(out, sizeof(out), "/art", 0, "") == 0, "empty");
-	expect(zlyme_artbook_path(out, 8, "/art", 0, "GB") == 0, "short buffer");
+	expect(zlyme_artbook_tool(out, sizeof(out), "/art", "Music Player") == 1, "music");
+	expect(strcmp(out, "/art/tools/Music Player.png") == 0, out);
+	expect(zlyme_artbook_tool(out, sizeof(out), "/art", "USB File Transfer") == 1, "usb");
+	expect(zlyme_artbook_system(out, sizeof(out), "/art", "GB/FC") == 0, "slash");
+	expect(zlyme_artbook_system(out, sizeof(out), "/art", "../GB") == 0, "dotdot");
+	expect(zlyme_artbook_tool(out, sizeof(out), "/art", "Files/Settings") == 0, "tool slash");
+	expect(zlyme_artbook_system(out, sizeof(out), "/art", "") == 0, "empty");
+	expect(zlyme_artbook_system(out, 8, "/art", "GB") == 0, "short");
+	expect(strstr(out, "list") == NULL, "no list path");
 
 	if (fails)
 		return 1;

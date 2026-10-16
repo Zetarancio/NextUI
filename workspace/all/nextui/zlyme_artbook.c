@@ -3,35 +3,49 @@
 #include <stdio.h>
 #include <string.h>
 
-static int artbook_special(const char *name)
+static int artbook_name_ok(const char *name)
 {
-	return !strcmp(name, "Tools") ||
-		!strcmp(name, "Recently Played") ||
-		!strcmp(name, "Collections");
+	return name && name[0] && !strchr(name, '/') && !strstr(name, "..");
 }
 
-int zlyme_artbook_path(char *out, size_t out_len, const char *root, int list_mode, const char *name)
+static int artbook_write(char *out, size_t out_len, const char *path)
 {
-	int wrote;
+	size_t n = strlen(path);
 
-	if (!out || out_len == 0 || !root || !root[0] || !name || !name[0])
-		return 0;
-	out[0] = '\0';
-	if (strchr(name, '/') || strstr(name, ".."))
-		return 0;
-	if (artbook_special(name)) {
-		if (list_mode)
-			wrote = snprintf(out, out_len, "%s/list/%s-list.png", root, name);
-		else
-			wrote = snprintf(out, out_len, "%s/system/%s.png", root, name);
-	} else if (list_mode) {
-		wrote = snprintf(out, out_len, "%s/list/(%s)-list.png", root, name);
-	} else {
-		wrote = snprintf(out, out_len, "%s/system/(%s).png", root, name);
-	}
-	if (wrote < 0 || (size_t)wrote >= out_len) {
+	if (n + 1 > out_len) {
 		out[0] = '\0';
 		return 0;
 	}
+	memcpy(out, path, n + 1);
 	return 1;
+}
+
+int zlyme_artbook_system(char *out, size_t out_len, const char *root, const char *tag)
+{
+	char path[1024];
+	int wrote;
+
+	if (!out || out_len == 0 || !root || !root[0] || !artbook_name_ok(tag))
+		return 0;
+	if (strchr(tag, ' '))
+		return 0;
+	out[0] = '\0';
+	wrote = snprintf(path, sizeof(path), "%s/system/(%s).png", root, tag);
+	if (wrote < 0 || (size_t)wrote >= sizeof(path))
+		return 0;
+	return artbook_write(out, out_len, path);
+}
+
+int zlyme_artbook_tool(char *out, size_t out_len, const char *root, const char *pak)
+{
+	char path[1024];
+	int wrote;
+
+	if (!out || out_len == 0 || !root || !root[0] || !artbook_name_ok(pak))
+		return 0;
+	out[0] = '\0';
+	wrote = snprintf(path, sizeof(path), "%s/tools/%s.png", root, pak);
+	if (wrote < 0 || (size_t)wrote >= sizeof(path))
+		return 0;
+	return artbook_write(out, out_len, path);
 }
