@@ -69,11 +69,21 @@ void Zlyme_captureBootState(void)
 
 static int wait_ab_game(const std::string &msg, const char *aLabel, const char *bLabel);
 
-static void service_apply(const char *name, const char *init, bool on)
+static void service_apply(const char *name, bool on)
 {
 	ctl_set(name, on ? "on" : "off");
-	std::string cmd = std::string(init) + (on ? " start" : " stop");
-	system(cmd.c_str());
+	std::string out;
+	std::string err;
+	int rc = zlyme_tool_exec("/usr/sbin/zlyme-net-services",
+		{"apply", name}, nullptr, &out, &err);
+	if (rc != 0) {
+		std::string msg = out + err;
+		while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r'))
+			msg.pop_back();
+		if (msg.empty())
+			msg = std::string(name) + " did not change.";
+		MenuList::showOverlay(msg, OverlayDismissMode::DismissOnA);
+	}
 }
 
 static std::string hdmi_conn()
@@ -417,8 +427,8 @@ static void samba_apply(bool on)
 	ctl_set("samba", on ? "on" : "off");
 	std::string out;
 	std::string err;
-	int rc = zlyme_tool_exec("/etc/init.d/S70samba",
-		{on ? "start" : "stop"}, nullptr, &out, &err);
+	int rc = zlyme_tool_exec("/usr/sbin/zlyme-net-services",
+		{"apply", "samba"}, nullptr, &out, &err);
 	bool init_ok = rc == 0;
 	ctl_set("samba", zlyme_samba_flag_after(on, init_ok) ? "on" : "off");
 	std::string msg = zlyme_samba_service_message(on, init_ok, out + err);
@@ -491,8 +501,8 @@ void Zlyme_appendNetworkItems(std::vector<AbstractMenuItem *> &items)
 		"OpenSSH with SFTP. Runs while Wi-Fi is on.",
 		on_off_v, on_off,
 		[]() -> std::any { return ctl_on("ssh"); },
-		[](const std::any &v) { service_apply("ssh", "/etc/init.d/S50sshd", std::any_cast<bool>(v)); },
-		[]() { service_apply("ssh", "/etc/init.d/S50sshd", true); }});
+		[](const std::any &v) { service_apply("ssh", std::any_cast<bool>(v)); },
+		[]() { service_apply("ssh", true); }});
 	items.push_back(new TextInputMenuItem{"SSH Password",
 		"Root login. An empty password is allowed.",
 		[]() -> std::any {
@@ -555,8 +565,8 @@ void Zlyme_appendNetworkItems(std::vector<AbstractMenuItem *> &items)
 		"Web UI on :8384. Runs while Wi-Fi is on.",
 		on_off_v, on_off,
 		[]() -> std::any { return ctl_on("syncthing"); },
-		[](const std::any &v) { service_apply("syncthing", "/etc/init.d/S75syncthing", std::any_cast<bool>(v)); },
-		[]() { service_apply("syncthing", "/etc/init.d/S75syncthing", false); }});
+		[](const std::any &v) { service_apply("syncthing", std::any_cast<bool>(v)); },
+		[]() { service_apply("syncthing", false); }});
 }
 
 void Zlyme_appendStatusLed(std::vector<AbstractMenuItem *> &items)

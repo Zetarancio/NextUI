@@ -92,9 +92,27 @@ static int wifi_run_cmd(const char *cmd, char *output, size_t output_len) {
     return runCmdTimeout(cmd, output, output_len, 5000);
 }
 
-// Helper to check if wpa_supplicant is running
-static bool wifi_supplicant_running(void) {
-    return system("pidof wpa_supplicant > /dev/null 2>&1") == 0;
+/* 1 when the saved flag is on, 0 when it is off, -1 when zlyme-ctl is missing. */
+static int zlyme_ctl_want(const char *name)
+{
+    const char *bin = "/usr/sbin/zlyme-ctl";
+    pid_t pid;
+    int st = 0;
+
+    if (access(bin, X_OK) != 0)
+        return -1;
+    pid = fork();
+    if (pid < 0)
+        return -1;
+    if (pid == 0) {
+        execl(bin, "zlyme-ctl", "want", name, (char *)NULL);
+        _exit(127);
+    }
+    if (waitpid(pid, &st, 0) < 0)
+        return -1;
+    if (!WIFEXITED(st) || WEXITSTATUS(st) == 127)
+        return -1;
+    return WEXITSTATUS(st) == 0;
 }
 
 // Helper to get IP address of wifi interface
@@ -113,11 +131,12 @@ static bool wifi_get_ip(char *ip, size_t len) {
 }
 
 void PLAT_wifiInit() {
+    int on;
     PLAT_wifiDiagnosticsEnable(CFG_getWifiDiagnostics());
-    // Boot starts wpa from zlyme-ctl (default on). Settings used to
-    // default wifi=off, so the toggle showed Off and scan never ran.
-    if (wifi_supplicant_running())
-        CFG_setWifi(true);
+    /* The saved flag is the enabled state. Association is separate. */
+    on = zlyme_ctl_want("wifi");
+    if (on >= 0)
+        CFG_setWifi(on);
     wifilog("Wifi init\n");
 }
 
@@ -126,20 +145,16 @@ bool PLAT_wifiEnabled() {
 }
 
 void PLAT_wifiEnable(bool on) {
-	if (on) {
-		wifilog("turning wifi on...\n");
-		char *argv[] = { "zlyme-wifi", "enable", NULL };
-		if (zlyme_wifi_argv(argv) == -127)
-			runCmdTimeout(SYSTEM_PATH "/etc/wifi/wifi_init.sh start > /dev/null 2>&1", NULL, 0, 10000);
+	char *argv[] = { "zlyme-wifi", on ? "enable" : "disable", NULL };
+	int want;
+	wifilog("turning wifi %s...\n", on ? "on" : "off");
+	if (zlyme_wifi_argv(argv) == -127)
+		LOG_error("PLAT_wifiEnable: zlyme-wifi is missing\n");
+	want = zlyme_ctl_want("wifi");
+	if (want >= 0)
+		CFG_setWifi(want ? true : false);
+	else
 		CFG_setWifi(on);
-	}
-	else {
-		wifilog("turning wifi off...\n");
-		CFG_setWifi(on);
-		char *argv[] = { "zlyme-wifi", "disable", NULL };
-		if (zlyme_wifi_argv(argv) == -127)
-			runCmdTimeout(SYSTEM_PATH "/etc/wifi/wifi_init.sh stop > /dev/null 2>&1", NULL, 0, 10000);
-	}
 }
 
 int PLAT_wifiScan(struct WIFI_network *networks, int max)
