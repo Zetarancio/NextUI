@@ -21,6 +21,7 @@
 #include <pthread.h>
 #include <sys/wait.h>
 #include <assert.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdint.h>
 
@@ -421,6 +422,38 @@ static void Directory_free(Directory* self) {
 	free(self);
 }
 
+static void replace_top_directory(void)
+{
+	char path[MAX_PATH];
+	int sel;
+	Directory *neu;
+
+	if (!top || !top->path || !stack || stack->count < 1)
+		return;
+	snprintf(path, sizeof(path), "%s", top->path);
+	sel = top->selected;
+	neu = Directory_new(path, 0);
+	if (!neu)
+		return;
+	if (neu->entries->count <= 0)
+		sel = 0;
+	else if (sel >= neu->entries->count)
+		sel = neu->entries->count - 1;
+	neu->selected = sel;
+	if (neu->entries->count > MAIN_ROW_COUNT && sel >= MAIN_ROW_COUNT)
+		neu->start = sel - MAIN_ROW_COUNT + 1;
+	else
+		neu->start = 0;
+	if (neu->start < 0)
+		neu->start = 0;
+	neu->end = neu->start + MAIN_ROW_COUNT;
+	if (neu->end > neu->entries->count)
+		neu->end = neu->entries->count;
+	stack->items[stack->count - 1] = neu;
+	Directory_free(top);
+	top = neu;
+}
+
 static void DirectoryArray_pop(Array* self) {
 	Directory_free(Array_pop(self));
 }
@@ -504,19 +537,54 @@ static int startgame = 0;
 
 #define MAX_RECENTS 24 // a multiple of all menu rows
 static void saveRecents(void) {
-	FILE* file = fopen(RECENT_PATH, "w");
-	if (file) {
-		for (int i=0; i<recents->count; i++) {
-			Recent* recent = recents->items[i];
-			fputs(recent->path, file);
-			if (recent->alias) {
-				fputs("\t", file);
-				fputs(recent->alias, file);
-			}
-			putc('\n', file);
-		}
-		fclose(file);
+	char dir[MAX_PATH];
+	char tmp[MAX_PATH];
+	char *slash;
+	int fd;
+	FILE *file;
+
+	snprintf(dir, sizeof(dir), "%s", RECENT_PATH);
+	slash = strrchr(dir, '/');
+	if (!slash)
+		return;
+	*slash = '\0';
+	mkdir(dir, 0755);
+	if (snprintf(tmp, sizeof(tmp), "%s/.recent.XXXXXX", dir) >= (int)sizeof(tmp))
+		return;
+	fd = mkstemp(tmp);
+	if (fd < 0)
+		return;
+	file = fdopen(fd, "w");
+	if (!file) {
+		close(fd);
+		unlink(tmp);
+		return;
 	}
+	for (int i=0; i<recents->count; i++) {
+		Recent* recent = recents->items[i];
+		if (fputs(recent->path, file) < 0)
+			goto fail;
+		if (recent->alias) {
+			if (fputc('\t', file) == EOF || fputs(recent->alias, file) < 0)
+				goto fail;
+		}
+		if (fputc('\n', file) == EOF)
+			goto fail;
+	}
+	if (fflush(file) != 0)
+		goto fail;
+	if (fsync(fileno(file)) != 0 && errno != EINVAL && errno != ENOTSUP)
+		goto fail;
+	if (fclose(file) != 0) {
+		unlink(tmp);
+		return;
+	}
+	if (rename(tmp, RECENT_PATH) != 0)
+		unlink(tmp);
+	return;
+fail:
+	fclose(file);
+	unlink(tmp);
 }
 static void addRecent(char* path, char* alias) {
 	char stored[MAX_PATH];
@@ -697,6 +765,39 @@ static int hasRecents(void) {
 
 	StringArray_free(parent_paths);
 	return has>0;
+}
+static void reloadRecentsFile(void)
+{
+	FILE *file;
+	char line[MAX_PATH];
+
+	if (recents)
+		RecentArray_free(recents);
+	recents = Array_new();
+	file = fopen(RECENT_PATH, "r");
+	if (!file)
+		return;
+	while (fgets(line, sizeof(line), file)) {
+		char *path;
+		char *alias;
+		char *tab;
+		normalizeNewline(line);
+		trimTrailingNewlines(line);
+		if (!line[0])
+			continue;
+		path = line;
+		alias = NULL;
+		tab = strchr(line, '\t');
+		if (tab) {
+			*tab = '\0';
+			alias = tab + 1;
+		}
+		if (recents->count < MAX_RECENTS)
+			Array_push(recents, Recent_new(path, alias));
+	}
+	fclose(file);
+	if (switcher_selected >= recents->count)
+		switcher_selected = recents->count ? recents->count - 1 : 0;
 }
 static int hasCollections(void) {
 	int has = 0;
@@ -2083,6 +2184,7 @@ static struct {
 	int def_i;
 	char auto_label[16];
 	int confirm;
+	int failed;
 } editprefs;
 
 static const char *edit_emu_label(const char *id)
@@ -3021,36 +3123,38 @@ int main (int argc, char *argv[]) {
 			int rows = editprefs_rows();
 			int delete_row = editprefs.path[0] ? rows : -1;
 			int total_rows = rows + (delete_row >= 0);
-			if (editprefs.confirm) {
+			if (editprefs.failed) {
+				if (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_B)) {
+					editprefs.failed = 0;
+					dirty = 1;
+				}
+			} else if (editprefs.confirm) {
 				if (PAD_justPressed(BTN_B)) {
 					editprefs.confirm = 0;
 					dirty = 1;
 				} else if (PAD_justPressed(BTN_A)) {
 					pid_t pid = fork();
+					int st = 1;
 					if (pid == 0) {
-						setenv("ZLYME_ROM_PLAN", "/tmp/zlyme-rom.plan", 1);
 						execl("/usr/sbin/zlyme-game-cleanup", "zlyme-game-cleanup",
-							"rom", editprefs.path, "--dry-run", (char *)NULL);
+							"rom", editprefs.path, (char *)NULL);
 						_exit(127);
 					}
-					int st = 1;
-					if (pid > 0) {
+					if (pid > 0)
 						waitpid(pid, &st, 0);
-						if (WIFEXITED(st) && WEXITSTATUS(st) == 0) {
-							pid = fork();
-							if (pid == 0) {
-								execl("/usr/sbin/zlyme-game-cleanup", "zlyme-game-cleanup",
-									"rom-apply", "/tmp/zlyme-rom.plan", (char *)NULL);
-								_exit(127);
-							}
-							if (pid > 0)
-								waitpid(pid, &st, 0);
-						}
+					if (pid > 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0) {
+						prefsReload();
+						reloadRecentsFile();
+						editprefs.confirm = 0;
+						editprefs.failed = 0;
+						editprefs.open = 0;
+						currentScreen = SCREEN_GAMELIST;
+						replace_top_directory();
+						folderbgchanged = 1;
+					} else {
+						editprefs.confirm = 0;
+						editprefs.failed = 1;
 					}
-					editprefs.confirm = 0;
-					editprefs.open = 0;
-					currentScreen = SCREEN_GAMELIST;
-					folderbgchanged = 1;
 					dirty = 1;
 				}
 			} else if (PAD_justPressed(BTN_B)) {
@@ -3411,9 +3515,15 @@ int main (int argc, char *argv[]) {
 				/* Theme background, not leftover game-list pixels. */
 				SDL_FillRect(screen, NULL, THEME_COLOR7);
 				ow = GFX_blitHardwareGroup(screen, show_setting);
-				if (editprefs.confirm) {
+				if (editprefs.failed) {
 					GFX_blitMessage(font.large,
-						"Delete this game?\nROM and its matching saves will be removed.",
+						"Could not delete this game.\nThe ROM is still on the card.",
+						screen, &(SDL_Rect){SCALE1(PADDING), content_y,
+							screen->w - SCALE1(PADDING * 2), screen->h - content_y - SCALE1(PILL_SIZE * 2)});
+					GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 0);
+				} else if (editprefs.confirm) {
+					GFX_blitMessage(font.large,
+						"Delete this game?\nRemoves the ROM, its saves, its artwork, and this game's governor and emulator choices. Folder and system choices stay.",
 						screen, &(SDL_Rect){SCALE1(PADDING), content_y,
 							screen->w - SCALE1(PADDING * 2), screen->h - content_y - SCALE1(PILL_SIZE * 2)});
 					GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 0);
