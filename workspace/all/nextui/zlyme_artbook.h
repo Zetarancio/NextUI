@@ -10,4 +10,9 @@
 int zlyme_artbook_system(char *out, size_t out_len, const char *root, const char *tag);
 int zlyme_artbook_tool(char *out, size_t out_len, const char *root, const char *pak);
 
+/* 1 when task_gen is the newest background request. 0 is never current,
+ * so a cleared request cannot be restored by an older load.
+ */
+int zlyme_bg_is_current(unsigned current, unsigned task_gen);
+
 #endif

@@ -29,6 +29,16 @@ int main(void)
 	expect(zlyme_artbook_system(out, 8, "/art", "GB") == 0, "short");
 	expect(strstr(out, "list") == NULL, "no list path");
 
+	/* Request 1 is in flight. Navigation bumps the request to 2 and
+	 * clears the picture. Request 1 then finishes and must not apply.
+	 * Request 2 is the one that may.
+	 */
+	expect(zlyme_bg_is_current(1, 1) == 1, "in flight matches");
+	expect(zlyme_bg_is_current(2, 1) == 0, "stale load after a clear");
+	expect(zlyme_bg_is_current(2, 2) == 1, "latest load applies");
+	expect(zlyme_bg_is_current(3, 2) == 0, "older queued load");
+	expect(zlyme_bg_is_current(0, 0) == 0, "cleared generation");
+
 	if (fails)
 		return 1;
 	printf("artbook path ok\n");

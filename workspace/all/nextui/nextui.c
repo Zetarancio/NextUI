@@ -2459,6 +2459,8 @@ typedef struct {
     char imagePath[MAX_PATH];
     BackgroundLoadedCallback callback;
     void* userData;
+    unsigned generation;
+    int enforce_generation;
 } LoadBackgroundTask;
 
 typedef struct finishedTask {
@@ -2579,7 +2581,20 @@ int thumbchanged=0;
 // queue a new image load task :D
 #define MAX_QUEUE_SIZE 1
 
+/* Counts the queued task and the one the worker has already dequeued.
+ * Dropping the queue head does not cancel that in-flight load.
+ * bg_request does: only the newest request may install a surface.
+ */
 int currentBGQueueSize = 0;
+static unsigned bg_request = 0;
+static unsigned bg_deliver_gen = 0;
+
+static unsigned bg_bump_locked(void) {
+	bg_request++;
+	if (bg_request == 0)
+		bg_request = 1;
+	return bg_request;
+}
 int currentThumbQueueSize = 0;
 int currentAnimQueueSize = 0;
 
@@ -2684,9 +2699,22 @@ int BGLoadWorker(void* unused) {
             }
         }
 
+        if (task->enforce_generation) {
+            SDL_LockMutex(bgqueueMutex);
+            if (!zlyme_bg_is_current(bg_request, task->generation)) {
+                SDL_UnlockMutex(bgqueueMutex);
+                if (result) SDL_FreeSurface(result);
+                result = NULL;
+                goto bg_finish;
+            }
+            bg_deliver_gen = task->generation;
+            SDL_UnlockMutex(bgqueueMutex);
+        }
+
         if (task->callback) {
 			task->callback(result);
 		}
+bg_finish:
         free(task);
 		SDL_LockMutex(bgqueueMutex);
 		if (!taskBGQueueHead) taskBGQueueTail = NULL;
@@ -2743,21 +2771,34 @@ void startLoadFolderBackground(const char* imagePath, BackgroundLoadedCallback c
  	snprintf(task->imagePath, sizeof(task->imagePath), "%s", imagePath);
     task->callback = callback;
     task->userData = userData;
+    task->enforce_generation = 1;
+    SDL_LockMutex(bgqueueMutex);
+    task->generation = bg_bump_locked();
+    SDL_UnlockMutex(bgqueueMutex);
     enqueueBGTask(task);
 }
 
 void onBackgroundLoaded(SDL_Surface* surface) {
+	SDL_LockMutex(bgqueueMutex);
 	SDL_LockMutex(bgMutex);
+	if (!zlyme_bg_is_current(bg_request, bg_deliver_gen)) {
+		SDL_UnlockMutex(bgMutex);
+		SDL_UnlockMutex(bgqueueMutex);
+		if (surface) SDL_FreeSurface(surface);
+		return;
+	}
 	folderbgchanged = 1;
 	if (folderbgbmp) SDL_FreeSurface(folderbgbmp);
     if (!surface) {
 		folderbgbmp = NULL;
 		SDL_UnlockMutex(bgMutex);
+		SDL_UnlockMutex(bgqueueMutex);
 		return;
 	}
     folderbgbmp = surface;
 	setNeedDraw(1);
 	SDL_UnlockMutex(bgMutex);
+	SDL_UnlockMutex(bgqueueMutex);
 }
 
 void startLoadThumb(const char* thumbpath, BackgroundLoadedCallback callback, void* userData) {
@@ -2767,6 +2808,8 @@ void startLoadThumb(const char* thumbpath, BackgroundLoadedCallback callback, vo
     snprintf(task->imagePath, sizeof(task->imagePath), "%s", thumbpath);
     task->callback = callback;
     task->userData = userData;
+    task->enforce_generation = 0;
+    task->generation = 0;
     enqueueThumbTask(task);
 }
 void onThumbLoaded(SDL_Surface* surface) {
@@ -3975,6 +4018,11 @@ int main (int argc, char *argv[]) {
 						if (tmppath[0])
 							startLoadFolderBackground(tmppath, onBackgroundLoaded, NULL);
 						else {
+							/* Bump before freeing so a load already out of
+							 * the queue cannot install this picture again.
+							 */
+							SDL_LockMutex(bgqueueMutex);
+							bg_bump_locked();
 							SDL_LockMutex(bgMutex);
 							if (folderbgbmp) {
 								SDL_FreeSurface(folderbgbmp);
@@ -3982,6 +4030,7 @@ int main (int argc, char *argv[]) {
 							}
 							folderbgchanged = 1;
 							SDL_UnlockMutex(bgMutex);
+							SDL_UnlockMutex(bgqueueMutex);
 						}
 					}
 				}

@@ -49,3 +49,8 @@ int zlyme_artbook_tool(char *out, size_t out_len, const char *root, const char *
 		return 0;
 	return artbook_write(out, out_len, path);
 }
+
+int zlyme_bg_is_current(unsigned current, unsigned task_gen)
+{
+	return current != 0 && current == task_gen;
+}
