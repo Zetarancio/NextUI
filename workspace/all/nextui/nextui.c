@@ -3517,7 +3517,7 @@ int main (int argc, char *argv[]) {
 				ow = GFX_blitHardwareGroup(screen, show_setting);
 				if (editprefs.failed) {
 					GFX_blitMessage(font.large,
-						"Could not delete this game.\nThe ROM is still on the card.",
+						"Could not finish deleting this game.\nThe ROM is still on the card. A save, image, or setting may already have been removed.",
 						screen, &(SDL_Rect){SCALE1(PADDING), content_y,
 							screen->w - SCALE1(PADDING * 2), screen->h - content_y - SCALE1(PILL_SIZE * 2)});
 					GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 0);
