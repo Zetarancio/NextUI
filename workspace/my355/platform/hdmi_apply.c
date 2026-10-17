@@ -84,6 +84,10 @@ static int collect_drm(struct zlyme_hdmi_mode *out, int max, int *nlists,
 			drmModeFreeConnector(conn);
 		}
 		drmModeFreeResources(res);
+		/* This open only reads modes. If it became master because
+		 * nobody else held the device, release that before close.
+		 * A card SDL already masters rejects the drop. */
+		drmDropMaster(fd);
 		close(fd);
 	}
 	return count;
@@ -132,17 +136,24 @@ void PLAT_hdmi_after_window(SDL_Window *window, SDL_Renderer *renderer)
 	int best_delta = 0;
 	int d, i, n;
 	SDL_DisplayMode got;
+	int orig_x = 0;
+	int orig_y = 0;
 
-	letterbox = 0;
-	if (!gate_on() || !window || !renderer)
+	if (!gate_on() || !window || !renderer || !GetHDMI()) {
+		letterbox = 0;
 		return;
-	if (!GetHDMI())
-		return;
+	}
 	if (collect_drm(storage, HDMI_MODE_MAX, &nlists, lists, counts) <= 0 ||
 	    zlyme_hdmi_select_list((const struct zlyme_hdmi_mode *const *)lists,
 				   counts, nlists, &choice) < 0 ||
-	    !choice.chosen)
+	    !choice.chosen) {
+		letterbox = 0;
 		return;
+	}
+	/* Same choice in this process: the CRTC request already happened. */
+	if (zlyme_hdmi_same(&applied, &choice))
+		return;
+	letterbox = 0;
 	for (d = 0; d < SDL_GetNumVideoDisplays(); d++) {
 		n = SDL_GetNumDisplayModes(d);
 		for (i = 0; i < n; i++) {
@@ -159,15 +170,30 @@ void PLAT_hdmi_after_window(SDL_Window *window, SDL_Renderer *renderer)
 			}
 		}
 	}
-	if (display < 0 || SDL_GetDisplayMode(display, index, &mode) != 0)
+	if (display < 0)
 		return;
-	if (SDL_SetWindowDisplayMode(window, &mode) != 0)
+	/* KMSDRM creates one SDL display per connector and puts the
+	 * window on display 0. SetWindowDisplayMode changes that
+	 * display only, so the window has to move onto the connector
+	 * that advertised the chosen mode. The driver hook ignores
+	 * position; SDL still uses it to pick the display. */
+	SDL_GetWindowPosition(window, &orig_x, &orig_y);
+	SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED_DISPLAY(display),
+			      SDL_WINDOWPOS_CENTERED_DISPLAY(display));
+	if (SDL_GetWindowDisplayIndex(window) != display ||
+	    SDL_GetDisplayMode(display, index, &mode) != 0) {
+		SDL_SetWindowPosition(window, orig_x, orig_y);
 		return;
-	SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN);
-	if (SDL_GetWindowDisplayMode(window, &got) != 0)
+	}
+	if (SDL_SetWindowDisplayMode(window, &mode) != 0 ||
+	    SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN) != 0 ||
+	    SDL_GetWindowDisplayMode(window, &got) != 0 ||
+	    got.w != choice.width || got.h != choice.height ||
+	    SDL_GetWindowDisplayIndex(window) != display) {
+		SDL_SetWindowFullscreen(window, 0);
+		SDL_SetWindowPosition(window, orig_x, orig_y);
 		return;
-	if (got.w != choice.width || got.h != choice.height)
-		return;
+	}
 	if (!zlyme_hdmi_commit(1, &choice, &applied)) {
 		if (!zlyme_hdmi_same(&applied, &choice))
 			return;
