@@ -470,6 +470,10 @@ static int zlyme_tool_artbook(char *out, size_t n, const char *pak_path)
 	return zlyme_artbook_tool(out, n, zlyme_artbook_root(), name);
 }
 
+/* Used by replace_top_directory, which sits above the other globals. */
+static Directory *top;
+static Array *stack; /* DirectoryArray */
+
 static void replace_top_directory(void)
 {
 	char path[MAX_PATH];
@@ -559,8 +563,6 @@ static void RecentArray_free(Array* self) {
 
 ///////////////////////////////////////
 
-static Directory* top;
-static Array* stack; // DirectoryArray
 static Array* recents; // RecentArray
 static Array *quick; // EntryArray
 static Array *quickActions; // EntryArray
