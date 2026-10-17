@@ -67,7 +67,9 @@ int PLAT_hdmi_bars(void)
 }
 
 /* The CRTC ioctl runs on the first swap, after this function returns.
- * SDL_GetCurrentDisplayMode is only the mode SDL stored. */
+ * SDL_GetCurrentDisplayMode is only the mode SDL stored. The sysfs
+ * mode file is the connector's current WxH. It does not carry the
+ * pixel clock, so it cannot separate 59.94 Hz from 60 Hz. */
 void PLAT_hdmi_note_present(void)
 {
 	char path[96];
