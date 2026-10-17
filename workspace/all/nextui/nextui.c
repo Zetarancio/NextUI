@@ -2580,6 +2580,18 @@ static void updatePillTextSurface(const char* entry_name, int move_w, SDL_Color 
 int folderbgchanged=0;
 int thumbchanged=0;
 
+/* Layer 1 blends. A new ArtBook picture drawn on the previous one
+ * leaves the old art in every transparent pixel. Clear to the theme
+ * color, then blend this picture once. Animations that are not a
+ * folder-background replacement do not use this.
+ */
+static void zlyme_show_folder_bg(SDL_Surface *bmp, int w, int h)
+{
+	GFX_clearLayers(LAYER_BACKGROUND);
+	if (bmp)
+		GFX_drawOnLayer(bmp, 0, 0, w, h, 1.0f, 0, LAYER_BACKGROUND);
+}
+
 // queue a new image load task :D
 #define MAX_QUEUE_SIZE 1
 
@@ -4220,11 +4232,7 @@ int main (int argc, char *argv[]) {
 			if(animationdirection != ANIM_NONE) {
 				if(CFG_getMenuTransitions()) {
 					SDL_LockMutex(bgMutex);
-					if(folderbgbmp) {
-						GFX_drawOnLayer(folderbgbmp, 0, 0, screen->w, screen->h, 1.0f, 0, LAYER_BACKGROUND);
-					} else {
-						GFX_clearLayers(LAYER_BACKGROUND);
-					}
+					zlyme_show_folder_bg(folderbgbmp, screen->w, screen->h);
 					SDL_UnlockMutex(bgMutex);
 					folderbgchanged = 1;
 					GFX_clearLayers(LAYER_TRANSITION);
@@ -4261,11 +4269,7 @@ int main (int argc, char *argv[]) {
 			if(lastScreen == SCREEN_QUICKMENU) {
 				SDL_LockMutex(bgMutex);
 				if(folderbgchanged) {
-					if(folderbgbmp)
-						GFX_drawOnLayer(folderbgbmp,0, 0, screen->w, screen->h,1.0f,0,LAYER_BACKGROUND);
-					else {
-						GFX_clearLayers(LAYER_BACKGROUND);
-					}
+					zlyme_show_folder_bg(folderbgbmp, screen->w, screen->h);
 					folderbgchanged = 0;
 				}
 				SDL_UnlockMutex(bgMutex);
@@ -4273,11 +4277,7 @@ int main (int argc, char *argv[]) {
 			else if(lastScreen == SCREEN_GAMELIST) {
 				SDL_LockMutex(bgMutex);
 				if(folderbgchanged) {
-					if(folderbgbmp)
-						GFX_drawOnLayer(folderbgbmp,0, 0, screen->w, screen->h,1.0f,0,LAYER_BACKGROUND);
-					else {
-						GFX_clearLayers(LAYER_BACKGROUND);
-					}
+					zlyme_show_folder_bg(folderbgbmp, screen->w, screen->h);
 					folderbgchanged = 0;
 				}
 				SDL_UnlockMutex(bgMutex);
@@ -4341,11 +4341,7 @@ int main (int argc, char *argv[]) {
 			static char cached_display_name[256] = "";
 			SDL_LockMutex(bgMutex);
 			if(folderbgchanged) {
-				if(folderbgbmp)
-					GFX_drawOnLayer(folderbgbmp,0, 0, screen->w, screen->h,1.0f,0,LAYER_BACKGROUND);
-				else {
-					GFX_clearLayers(LAYER_BACKGROUND);
-				}
+				zlyme_show_folder_bg(folderbgbmp, screen->w, screen->h);
 				folderbgchanged = 0;
 			}
 			SDL_UnlockMutex(bgMutex);
