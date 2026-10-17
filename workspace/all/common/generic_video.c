@@ -31,6 +31,23 @@
 
 static void plat_blank_fb0(void);
 
+/* my355 provides the strong definitions in hdmi_apply.c. Other
+ * platforms keep these no-ops. ZLYME_HDMI_720P=1 is the only switch
+ * that asks the strong path to modeset. */
+__attribute__((weak)) void PLAT_hdmi_after_window(SDL_Window *window, SDL_Renderer *renderer)
+{
+	(void)window;
+	(void)renderer;
+}
+__attribute__((weak)) void PLAT_hdmi_map_output(SDL_Rect *rect)
+{
+	(void)rect;
+}
+__attribute__((weak)) int PLAT_hdmi_bars(void)
+{
+	return 0;
+}
+
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
 #define NEXTUI_TSAN 1
@@ -788,6 +805,7 @@ SDL_Surface* PLAT_initVideo(void) {
 	device_width	= w;
 	device_height	= h;
 	device_pitch	= p;
+	PLAT_hdmi_after_window(vid.window, vid.renderer);
 
 	vid.sharpness = SHARPNESS_SOFT;
 
@@ -1878,6 +1896,15 @@ void runShaderPass(ShaderPass * shader_pass, GLuint src_texture,
 
 	if (!shader_pass) return;
 
+	if (!target_texture && dst_width > 0 && dst_height > 0) {
+		SDL_Rect mapped = { x, y, dst_width, dst_height };
+		PLAT_hdmi_map_output(&mapped);
+		x = mapped.x;
+		y = mapped.y;
+		dst_width = mapped.w;
+		dst_height = mapped.h;
+	}
+
 	ShaderProgram * shader_program = shader_pass->program;
 
 	if (!shader_program || !shader_program->shader_p) {
@@ -2172,6 +2199,17 @@ void PLAT_GL_Swap() {
     }
 
 	SDL_GL_MakeCurrent(vid.window, vid.gl_context);
+	if (PLAT_hdmi_bars()) {
+		int drawable_w = 0;
+		int drawable_h = 0;
+
+		SDL_GL_GetDrawableSize(vid.window, &drawable_w, &drawable_h);
+		if (drawable_w > 0 && drawable_h > 0) {
+			glViewport(0, 0, drawable_w, drawable_h);
+			glClearColor(0.f, 0.f, 0.f, 1.f);
+			glClear(GL_COLOR_BUFFER_BIT);
+		}
+	}
 
 	static GLuint effect_tex = 0;
 	static int effect_w = 0, effect_h = 0;
