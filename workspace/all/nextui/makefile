@@ -23,7 +23,10 @@ TARGET = nextui
 INCDIR = -I. -I../common/ -I../../$(PLATFORM)/platform/
 SOURCE = $(TARGET).c zlyme_thumbpath.c ../common/scaler.c ../common/utils.c ../common/config.c ../common/api.c ../common/palette.c ../../$(PLATFORM)/platform/platform.c
 ifeq ($(PLATFORM),my355)
-SOURCE += ../../my355/platform/hdmi_mode.c ../../my355/platform/hdmi_apply.c
+ifneq ($(ZLYME_HDMI_INC),)
+CFLAGS += -I$(ZLYME_HDMI_INC)
+SOURCE += $(ZLYME_HDMI_MODE_SRC) ../../my355/platform/hdmi_apply.c
+endif
 endif
 
 CC = $(CROSS_COMPILE)gcc

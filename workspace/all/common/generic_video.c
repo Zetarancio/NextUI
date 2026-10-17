@@ -47,6 +47,9 @@ __attribute__((weak)) int PLAT_hdmi_bars(void)
 {
 	return 0;
 }
+__attribute__((weak)) void PLAT_hdmi_note_present(void)
+{
+}
 
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
@@ -1516,6 +1519,7 @@ void PLAT_GPU_Flip() {
 	SDL_RenderCopy(vid.renderer, vid.target_layer4, NULL, NULL);
 	SDL_RenderCopy(vid.renderer, vid.target_layer5, NULL, NULL);
 	SDL_RenderPresent(vid.renderer);
+	PLAT_hdmi_note_present();
 }
 
 void PLAT_animateSurfaceOpacity(
@@ -2448,6 +2452,7 @@ void PLAT_GL_Swap() {
     }
 
 	SDL_GL_SwapWindow(vid.window);
+	PLAT_hdmi_note_present();
 
     frame_count++;
 	reloadShaderTextures = 0;

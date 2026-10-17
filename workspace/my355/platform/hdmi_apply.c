@@ -1,23 +1,18 @@
 #include "hdmi_mode.h"
 
 #include <SDL2/SDL.h>
-#include <xf86drm.h>
-#include <xf86drmMode.h>
 
-int GetHDMI(void);
-
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-
-#define HDMI_MODE_MAX 64
 
 static int letterbox;
 static int view_x, view_y, view_w, view_h;
 static int base_w, base_h;
-static struct zlyme_hdmi_choice applied;
+static int scanout_done;
+static char scan_card[8];
+static char scan_name[32];
+static int scan_w, scan_h;
 
 static int gate_on(void)
 {
@@ -26,84 +21,33 @@ static int gate_on(void)
 	return flag && flag[0] == '1' && flag[1] == '\0';
 }
 
-static int collect_drm(struct zlyme_hdmi_mode *out, int max, int *nlists,
-		       struct zlyme_hdmi_mode **list_ptr, int *list_count)
+static int env_int(const char *name)
 {
-	int card;
-	int count = 0;
+	const char *value = getenv(name);
+	char *end = NULL;
+	long parsed;
 
-	*nlists = 0;
-	for (card = 0; card < 2 && *nlists < 2; card++) {
-		char path[64];
-		int fd;
-		drmModeRes *res;
-		int i;
-		int start = count;
-
-		snprintf(path, sizeof(path), "/dev/dri/card%d", card);
-		fd = open(path, O_RDWR | O_CLOEXEC);
-		if (fd < 0)
-			continue;
-		res = drmModeGetResources(fd);
-		if (!res) {
-			close(fd);
-			continue;
-		}
-		for (i = 0; i < res->count_connectors && count < max; i++) {
-			drmModeConnector *conn;
-			int m;
-
-			conn = drmModeGetConnector(fd, res->connectors[i]);
-			if (!conn)
-				continue;
-			if (conn->connection != DRM_MODE_CONNECTED ||
-			    conn->connector_type != DRM_MODE_CONNECTOR_HDMIA ||
-			    conn->count_modes <= 0) {
-				drmModeFreeConnector(conn);
-				continue;
-			}
-			start = count;
-			for (m = 0; m < conn->count_modes && count < max; m++) {
-				drmModeModeInfo *mode = &conn->modes[m];
-
-				out[count].width = mode->hdisplay;
-				out[count].height = mode->vdisplay;
-				out[count].refresh_mhz = zlyme_hdmi_refresh_mhz(
-					mode->clock, mode->htotal, mode->vtotal);
-				if (out[count].refresh_mhz <= 0 && mode->vrefresh > 0)
-					out[count].refresh_mhz = mode->vrefresh * 1000;
-				out[count].preferred =
-					(mode->type & DRM_MODE_TYPE_PREFERRED) ? 1 : 0;
-				count++;
-			}
-			if (count > start && *nlists < 2) {
-				list_ptr[*nlists] = &out[start];
-				list_count[*nlists] = count - start;
-				(*nlists)++;
-			}
-			drmModeFreeConnector(conn);
-		}
-		drmModeFreeResources(res);
-		/* This open only reads modes. If it became master because
-		 * nobody else held the device, release that before close.
-		 * A card SDL already masters rejects the drop. */
-		drmDropMaster(fd);
-		close(fd);
-	}
-	return count;
+	if (!value || !value[0])
+		return -1;
+	parsed = strtol(value, &end, 10);
+	if (!end || *end != '\0' || parsed < 0 || parsed > 16384)
+		return -1;
+	return (int)parsed;
 }
 
-static int sdl_mode_matches(const SDL_DisplayMode *mode,
-			    const struct zlyme_hdmi_choice *want, int *delta)
+static int name_ok(const char *name)
 {
-	int refresh;
+	int i;
 
-	if (mode->w != want->width || mode->h != want->height)
+	if (!name || !name[0] || strlen(name) > 31)
 		return 0;
-	refresh = mode->refresh_rate > 0 ? mode->refresh_rate * 1000 : 0;
-	*delta = refresh - want->refresh_mhz;
-	if (*delta < 0)
-		*delta = -*delta;
+	for (i = 0; name[i]; i++) {
+		char c = name[i];
+
+		if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+		      (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'))
+			return 0;
+	}
 	return 1;
 }
 
@@ -122,87 +66,84 @@ int PLAT_hdmi_bars(void)
 	return letterbox;
 }
 
-void PLAT_hdmi_after_window(SDL_Window *window, SDL_Renderer *renderer)
+/* The CRTC ioctl runs on the first swap, after this function returns.
+ * SDL_GetCurrentDisplayMode is only the mode SDL stored. */
+void PLAT_hdmi_note_present(void)
 {
-	struct zlyme_hdmi_mode storage[HDMI_MODE_MAX];
-	struct zlyme_hdmi_mode *lists[2];
-	int counts[2];
-	int nlists = 0;
-	struct zlyme_hdmi_choice choice;
-	struct zlyme_hdmi_rect box;
-	SDL_DisplayMode mode;
-	int display = -1;
-	int index = -1;
-	int best_delta = 0;
-	int d, i, n;
-	SDL_DisplayMode got;
-	int orig_x = 0;
-	int orig_y = 0;
+	char path[96];
+	char got[64];
+	FILE *fp;
+	int n;
 
-	if (!gate_on() || !window || !renderer || !GetHDMI()) {
-		letterbox = 0;
+	if (scanout_done || !letterbox)
+		return;
+	scanout_done = 1;
+	n = snprintf(path, sizeof(path), "/sys/class/drm/card%s-%s/mode",
+		     scan_card, scan_name);
+	if (n < 0 || n >= (int)sizeof(path)) {
+		SDL_Log("ZLYME_HDMI_SCANOUT unread");
 		return;
 	}
-	if (collect_drm(storage, HDMI_MODE_MAX, &nlists, lists, counts) <= 0 ||
-	    zlyme_hdmi_select_list((const struct zlyme_hdmi_mode *const *)lists,
-				   counts, nlists, &choice) < 0 ||
-	    !choice.chosen) {
-		letterbox = 0;
+	fp = fopen(path, "r");
+	if (!fp) {
+		SDL_Log("ZLYME_HDMI_SCANOUT unread %s", path);
 		return;
 	}
-	/* Same choice in this process: the CRTC request already happened. */
-	if (zlyme_hdmi_same(&applied, &choice))
+	if (!fgets(got, sizeof(got), fp)) {
+		fclose(fp);
+		SDL_Log("ZLYME_HDMI_SCANOUT unread %s", path);
 		return;
-	letterbox = 0;
-	for (d = 0; d < SDL_GetNumVideoDisplays(); d++) {
-		n = SDL_GetNumDisplayModes(d);
-		for (i = 0; i < n; i++) {
-			int delta = 0;
+	}
+	fclose(fp);
+	got[strcspn(got, "\r\n")] = '\0';
+	if (atoi(got) == scan_w) {
+		char *x = strchr(got, 'x');
 
-			if (SDL_GetDisplayMode(d, i, &mode) != 0)
-				continue;
-			if (!sdl_mode_matches(&mode, &choice, &delta))
-				continue;
-			if (display < 0 || delta < best_delta) {
-				display = d;
-				index = i;
-				best_delta = delta;
-			}
+		if (x && atoi(x + 1) == scan_h) {
+			SDL_Log("ZLYME_HDMI_SCANOUT %s %s", path, got);
+			return;
 		}
 	}
-	if (display < 0)
+	SDL_Log("ZLYME_HDMI_SCANOUT mismatch %s %s", path, got);
+}
+
+void PLAT_hdmi_after_window(SDL_Window *window, SDL_Renderer *renderer)
+{
+	struct zlyme_hdmi_rect box;
+	SDL_DisplayMode got;
+	const char *name;
+	int width, height, card, index;
+
+	letterbox = 0;
+	scanout_done = 0;
+	if (!gate_on() || !window || !renderer)
 		return;
-	/* KMSDRM creates one SDL display per connector and puts the
-	 * window on display 0. SetWindowDisplayMode changes that
-	 * display only, so the window has to move onto the connector
-	 * that advertised the chosen mode. The driver hook ignores
-	 * position; SDL still uses it to pick the display. */
-	SDL_GetWindowPosition(window, &orig_x, &orig_y);
-	SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED_DISPLAY(display),
-			      SDL_WINDOWPOS_CENTERED_DISPLAY(display));
-	if (SDL_GetWindowDisplayIndex(window) != display ||
-	    SDL_GetDisplayMode(display, index, &mode) != 0) {
-		SDL_SetWindowPosition(window, orig_x, orig_y);
+	width = env_int("ZLYME_HDMI_WIDTH");
+	height = env_int("ZLYME_HDMI_HEIGHT");
+	card = env_int("ZLYME_HDMI_CARD");
+	name = getenv("ZLYME_HDMI_CONNECTOR");
+	if (width <= 0 || height <= 0 || card < 0 || card > 9 || !name_ok(name))
 		return;
-	}
-	if (SDL_SetWindowDisplayMode(window, &mode) != 0 ||
-	    SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN) != 0 ||
-	    SDL_GetWindowDisplayMode(window, &got) != 0 ||
-	    got.w != choice.width || got.h != choice.height ||
-	    SDL_GetWindowDisplayIndex(window) != display) {
-		SDL_SetWindowFullscreen(window, 0);
-		SDL_SetWindowPosition(window, orig_x, orig_y);
+	index = SDL_GetWindowDisplayIndex(window);
+	if (index < 0 || SDL_GetCurrentDisplayMode(index, &got) != 0)
 		return;
-	}
-	if (!zlyme_hdmi_commit(1, &choice, &applied)) {
-		if (!zlyme_hdmi_same(&applied, &choice))
-			return;
+	/* The SDL patch selected this size on the connector id it was
+	 * given. A size match on a different connector is not success:
+	 * the patch refuses to program a non-HDMI-A connector. */
+	if (got.w != width || got.h != height) {
+		SDL_Log("ZLYME_HDMI_REQUEST mismatch sdl %dx%d policy %dx%d",
+			got.w, got.h, width, height);
+		return;
 	}
 	zlyme_hdmi_viewport(640, 480, got.w, got.h, &box);
-	if (box.w == got.w && box.h == got.h) {
-		letterbox = 0;
+	snprintf(scan_card, sizeof(scan_card), "%d", card);
+	snprintf(scan_name, sizeof(scan_name), "%s", name);
+	scan_w = got.w;
+	scan_h = got.h;
+	SDL_Log("ZLYME_HDMI_REQUEST %dx%d viewport %d,%d %dx%d",
+		got.w, got.h, box.x, box.y, box.w, box.h);
+	if (box.w == got.w && box.h == got.h)
 		return;
-	}
 	base_w = 640;
 	base_h = 480;
 	view_x = box.x;
@@ -212,6 +153,4 @@ void PLAT_hdmi_after_window(SDL_Window *window, SDL_Renderer *renderer)
 	letterbox = 1;
 	SDL_RenderSetLogicalSize(renderer, 640, 480);
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-	SDL_Log("ZLYME_HDMI_720P: %dx%d viewport %d,%d %dx%d",
-		got.w, got.h, box.x, box.y, box.w, box.h);
 }
