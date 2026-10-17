@@ -22,6 +22,9 @@ int main(void)
 	expect(zlyme_artbook_tool(out, sizeof(out), "/art", "Music Player") == 1, "music");
 	expect(strcmp(out, "/art/tools/Music Player.png") == 0, out);
 	expect(zlyme_artbook_tool(out, sizeof(out), "/art", "USB File Transfer") == 1, "usb");
+	expect(zlyme_artbook_tools_category(out, sizeof(out), "/art") == 1, "tools root");
+	expect(strcmp(out, "/art/special/tools.png") == 0, out);
+	expect(zlyme_artbook_tools_category(out, 8, "/art") == 0, "tools short");
 	expect(zlyme_artbook_system(out, sizeof(out), "/art", "GB/FC") == 0, "slash");
 	expect(zlyme_artbook_system(out, sizeof(out), "/art", "../GB") == 0, "dotdot");
 	expect(zlyme_artbook_tool(out, sizeof(out), "/art", "Files/Settings") == 0, "tool slash");

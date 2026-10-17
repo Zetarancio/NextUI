@@ -446,7 +446,10 @@ static int zlyme_system_artbook(char *out, size_t n, const char *folder)
 		return 0;
 	if (exactMatch((char *)folder, COLLECTIONS_PATH) || suffixMatch("/Collections", folder))
 		return 0;
-	if (exactMatch((char *)folder, TOOLS_PATH) || prefixMatch(TOOLS_PATH, folder))
+	/* The Tools root is one category picture. A pak inside it is not. */
+	if (exactMatch((char *)folder, TOOLS_PATH))
+		return zlyme_artbook_tools_category(out, n, zlyme_artbook_root());
+	if (prefixMatch(TOOLS_PATH, folder))
 		return 0;
 	emu[0] = '\0';
 	getEmuName((char *)folder, emu);

@@ -36,6 +36,20 @@ int zlyme_artbook_system(char *out, size_t out_len, const char *root, const char
 	return artbook_write(out, out_len, path);
 }
 
+int zlyme_artbook_tools_category(char *out, size_t out_len, const char *root)
+{
+	char path[1024];
+	int wrote;
+
+	if (!out || out_len == 0 || !root || !root[0])
+		return 0;
+	out[0] = '\0';
+	wrote = snprintf(path, sizeof(path), "%s/special/tools.png", root);
+	if (wrote < 0 || (size_t)wrote >= sizeof(path))
+		return 0;
+	return artbook_write(out, out_len, path);
+}
+
 int zlyme_artbook_tool(char *out, size_t out_len, const char *root, const char *pak)
 {
 	char path[1024];
