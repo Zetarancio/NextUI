@@ -2,6 +2,7 @@
 #include "keyboardprompt.hpp"
 #include "oneshot.hpp"
 #include "sambasettings.hpp"
+#include "../common/zlyme_textrow.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -1410,7 +1411,7 @@ static int cleanup_count(const char *action, std::string *extra)
 		if (!strncmp(line, "COUNT=", 6)) {
 			n = atoi(line + 6);
 			saw = true;
-		} else
+		} else if (extra)
 			rest += line;
 	}
 	int status = pclose(f);
@@ -1432,8 +1433,8 @@ static bool cleanup_run(const char *action)
 
 static InputReactionHint cleanup_button(const char *action, const char *empty_msg, const char *ask_fmt, const char *a_label = "DELETE")
 {
-	std::string extra;
-	int n = cleanup_count(action, &extra);
+	int n = cleanup_count(action, NULL);
+	char ask[128];
 	if (n < 0) {
 		MenuList::showOverlay("Scan failed", OverlayDismissMode::DismissOnA);
 		return NoOp;
@@ -1442,11 +1443,13 @@ static InputReactionHint cleanup_button(const char *action, const char *empty_ms
 		MenuList::showOverlay(empty_msg, OverlayDismissMode::DismissOnA);
 		return NoOp;
 	}
-	char ask[512];
-	snprintf(ask, sizeof(ask), ask_fmt, n);
-	if (!extra.empty()) {
-		strncat(ask, "\n", sizeof(ask) - strlen(ask) - 1);
-		strncat(ask, extra.c_str(), sizeof(ask) - strlen(ask) - 1);
+	/* The dry-run still lists the paths. The dialog is the count.
+	 * A comma-separated path line is longer than GFX_blitMessage's
+	 * 256-byte row and that strcpy is what aborted.
+	 */
+	if (!zlyme_cleanup_ask(ask, sizeof(ask), ask_fmt, n)) {
+		MenuList::showOverlay("Scan failed", OverlayDismissMode::DismissOnA);
+		return NoOp;
 	}
 	if (!wait_ab_game(ask, a_label, "BACK"))
 		return NoOp;

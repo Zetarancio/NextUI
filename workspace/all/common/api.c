@@ -20,6 +20,7 @@
 
 #include "utils.h"
 #include "config.h"
+#include "zlyme_textrow.h"
 
 #include <pthread.h>
 
@@ -2127,17 +2128,12 @@ void GFX_blitMessage(TTF_Font *font, char *msg, SDL_Surface *dst, SDL_Rect *dst_
 	{
 		int len;
 		if (i + 1 < row_count)
-		{
 			len = rows[i + 1] - rows[i] - 1;
-			if (len)
-				strncpy(line, rows[i], len);
-			line[len] = '\0';
-		}
 		else
-		{
 			len = strlen(rows[i]);
-			strcpy(line, rows[i]);
-		}
+		if (len < 0)
+			len = 0;
+		zlyme_copy_text_row(line, sizeof(line), rows[i], (size_t)len);
 
 		if (len)
 		{
@@ -2529,17 +2525,12 @@ void GFX_sizeText(TTF_Font *font, const char *str, int leading, int *w, int *h)
 	{
 		int len;
 		if (i + 1 < count)
-		{
 			len = lines[i + 1] - lines[i] - 1;
-			if (len)
-				strncpy(line, lines[i], len);
-			line[len] = '\0';
-		}
 		else
-		{
 			len = strlen(lines[i]);
-			strcpy(line, lines[i]);
-		}
+		if (len < 0)
+			len = 0;
+		zlyme_copy_text_row(line, sizeof(line), lines[i], (size_t)len);
 
 		if (len)
 		{
@@ -2576,17 +2567,12 @@ void GFX_blitText(TTF_Font *font, const char *str, int leading, SDL_Color color,
 	{
 		int len;
 		if (i + 1 < count)
-		{
 			len = lines[i + 1] - lines[i] - 1;
-			if (len)
-				strncpy(line, lines[i], len);
-			line[len] = '\0';
-		}
 		else
-		{
 			len = strlen(lines[i]);
-			strcpy(line, lines[i]);
-		}
+		if (len < 0)
+			len = 0;
+		zlyme_copy_text_row(line, sizeof(line), lines[i], (size_t)len);
 
 		if (len)
 		{
