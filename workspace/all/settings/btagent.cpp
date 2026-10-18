@@ -207,6 +207,7 @@ bool PairingAgent::ensureBus()
 {
     if (bus && !g_dbus_connection_is_closed(bus))
         return true;
+    session_held = false;
     if (bus) {
         g_object_unref(bus);
         bus = nullptr;
@@ -253,35 +254,37 @@ bool PairingAgent::startDiscovery()
 {
     GError *err = nullptr;
     bool powered = false;
-    bool already = false;
     int result;
 
+    if (session_held && bus && !g_dbus_connection_is_closed(bus))
+        return true;
+    session_held = false;
     if (!ensureBus())
         return false;
     if (!adapterBool("Powered", &powered) || !powered)
         return false;
-    if (adapterBool("Discovering", &already) && already)
-        return true;
 
     g_dbus_connection_call_sync(
         bus, "org.bluez", "/org/bluez/hci0",
         "org.bluez.Adapter1", "StartDiscovery",
         nullptr, nullptr,
         G_DBUS_CALL_FLAGS_NONE, BT_DBUS_MS, nullptr, &err);
-    result = bt_disc_classify(1, err ? err->message : nullptr);
+    result = bt_disc_classify(powered ? 1 : 0, err ? err->message : nullptr);
     if (err) {
         std::cout << "StartDiscovery: " << err->message << "\n";
         g_error_free(err);
     }
-    already = false;
-    adapterBool("Discovering", &already);
-    return bt_disc_is_active(result, already ? 1 : 0) != 0;
+    session_held = bt_session_after_call(0, 1, result) != 0;
+    return session_held;
 }
 
 void PairingAgent::stopDiscovery()
 {
     GError *err = nullptr;
 
+    if (!session_held)
+        return;
+    session_held = false;
     if (!bus || g_dbus_connection_is_closed(bus))
         return;
     g_dbus_connection_call_sync(
@@ -295,11 +298,7 @@ void PairingAgent::stopDiscovery()
 
 bool PairingAgent::discovering()
 {
-    bool on = false;
-
-    if (!adapterBool("Discovering", &on))
-        return false;
-    return on;
+    return session_held && bus && !g_dbus_connection_is_closed(bus);
 }
 
 int PairingAgent::copyScan(::bt_seen *out, int max)
@@ -327,77 +326,76 @@ int PairingAgent::copyScan(::bt_seen *out, int max)
     body = g_variant_get_child_value(ret, 0);
     g_variant_iter_init(&iter, body);
     while (count < max && g_variant_iter_next(&iter, "{&o@a{sa{sv}}}", &path, &ifaces)) {
-        GVariant *device;
+        GVariantIter iface_iter;
+        const char *iface = nullptr;
+        GVariant *props = nullptr;
         GVariant *dict = nullptr;
-        GVariant *v;
-        char addr[18];
-        char name[249];
-        char icon[64];
-        unsigned int class_val = 0;
-        int paired = 0;
-        int kind;
-        int have_name = 0;
 
-        addr[0] = name[0] = icon[0] = '\0';
         if (!path || !strstr(path, "/dev_")) {
             g_variant_unref(ifaces);
             continue;
         }
-        device = g_dbus_connection_call_sync(
-            bus, "org.bluez", path,
-            "org.freedesktop.DBus.Properties", "GetAll",
-            g_variant_new("(s)", "org.bluez.Device1"),
-            G_VARIANT_TYPE("(a{sv})"),
-            G_DBUS_CALL_FLAGS_NONE, BT_DBUS_MS, nullptr, nullptr);
+        g_variant_iter_init(&iface_iter, ifaces);
+        while (g_variant_iter_next(&iface_iter, "{&s@a{sv}}", &iface, &props)) {
+            if (iface && strcmp(iface, "org.bluez.Device1") == 0 && !dict)
+                dict = props;
+            else
+                g_variant_unref(props);
+        }
         g_variant_unref(ifaces);
-        if (!device)
+        if (!dict)
             continue;
-        g_variant_get(device, "(@a{sv})", &dict);
-        if (!dict) {
-            g_variant_unref(device);
-            continue;
-        }
-        v = g_variant_lookup_value(dict, "Address", G_VARIANT_TYPE_STRING);
-        if (v) {
-            strncpy(addr, g_variant_get_string(v, nullptr), sizeof(addr) - 1);
-            g_variant_unref(v);
-        }
-        v = g_variant_lookup_value(dict, "Name", G_VARIANT_TYPE_STRING);
-        if (!v)
+        {
+            char addr[18];
+            char name[249];
+            char alias[249];
+            char icon[64];
+            unsigned int class_val = 0;
+            int paired = 0;
+            int connected = 0;
+            GVariant *v;
+
+            addr[0] = name[0] = alias[0] = icon[0] = '\0';
+            v = g_variant_lookup_value(dict, "Address", G_VARIANT_TYPE_STRING);
+            if (v) {
+                bt_copy_term(addr, sizeof(addr), g_variant_get_string(v, nullptr));
+                g_variant_unref(v);
+            }
+            v = g_variant_lookup_value(dict, "Name", G_VARIANT_TYPE_STRING);
+            if (v) {
+                bt_copy_term(name, sizeof(name), g_variant_get_string(v, nullptr));
+                g_variant_unref(v);
+            }
             v = g_variant_lookup_value(dict, "Alias", G_VARIANT_TYPE_STRING);
-        if (v) {
-            strncpy(name, g_variant_get_string(v, nullptr), sizeof(name) - 1);
-            have_name = name[0] != '\0';
-            g_variant_unref(v);
+            if (v) {
+                bt_copy_term(alias, sizeof(alias), g_variant_get_string(v, nullptr));
+                g_variant_unref(v);
+            }
+            v = g_variant_lookup_value(dict, "Icon", G_VARIANT_TYPE_STRING);
+            if (v) {
+                bt_copy_term(icon, sizeof(icon), g_variant_get_string(v, nullptr));
+                g_variant_unref(v);
+            }
+            v = g_variant_lookup_value(dict, "Class", G_VARIANT_TYPE_UINT32);
+            if (v) {
+                class_val = g_variant_get_uint32(v);
+                g_variant_unref(v);
+            }
+            v = g_variant_lookup_value(dict, "Paired", G_VARIANT_TYPE_BOOLEAN);
+            if (v) {
+                paired = g_variant_get_boolean(v) ? 1 : 0;
+                g_variant_unref(v);
+            }
+            v = g_variant_lookup_value(dict, "Connected", G_VARIANT_TYPE_BOOLEAN);
+            if (v) {
+                connected = g_variant_get_boolean(v) ? 1 : 0;
+                g_variant_unref(v);
+            }
+            g_variant_unref(dict);
+            if (bt_seen_from_fields(&out[count], addr, name, alias, icon,
+                                    class_val, paired, connected))
+                count++;
         }
-        v = g_variant_lookup_value(dict, "Icon", G_VARIANT_TYPE_STRING);
-        if (v) {
-            strncpy(icon, g_variant_get_string(v, nullptr), sizeof(icon) - 1);
-            g_variant_unref(v);
-        }
-        v = g_variant_lookup_value(dict, "Class", G_VARIANT_TYPE_UINT32);
-        if (v) {
-            class_val = g_variant_get_uint32(v);
-            g_variant_unref(v);
-        }
-        v = g_variant_lookup_value(dict, "Paired", G_VARIANT_TYPE_BOOLEAN);
-        if (v) {
-            paired = g_variant_get_boolean(v) ? 1 : 0;
-            g_variant_unref(v);
-        }
-        g_variant_unref(dict);
-        g_variant_unref(device);
-        if (!bt_mac_ok(addr))
-            continue;
-        kind = bt_kind_from_class(class_val);
-        if (!kind)
-            kind = bt_kind_from_icon(icon);
-        memset(&out[count], 0, sizeof(out[count]));
-        strncpy(out[count].addr, addr, sizeof(out[count].addr) - 1);
-        strncpy(out[count].name, have_name ? name : addr, sizeof(out[count].name) - 1);
-        out[count].kind = kind;
-        out[count].paired = paired;
-        count++;
     }
     g_variant_unref(body);
     g_variant_unref(ret);

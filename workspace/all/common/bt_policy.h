@@ -15,6 +15,20 @@ enum {
 	BT_DISC_GONE
 };
 
+/* Always writes a terminator. A source longer than dst_len-1 is cut. */
+static inline void bt_copy_term(char *dst, size_t dst_len, const char *src)
+{
+	size_t i;
+
+	if (!dst || dst_len == 0)
+		return;
+	if (!src)
+		src = "";
+	for (i = 0; i + 1 < dst_len && src[i] != '\0'; i++)
+		dst[i] = src[i];
+	dst[i] = '\0';
+}
+
 static inline int bt_mac_ok(const char *s)
 {
 	int i;
@@ -72,6 +86,25 @@ static inline int bt_disc_classify(int powered, const char *err)
 }
 
 /* Active only with a successful call, or InProgress while BlueZ agrees. */
+/* Another client's Discovering property is not our session.
+ * Call StartDiscovery unless this connection already holds one.
+ * InProgress means BlueZ already recorded this client. */
+static inline int bt_disc_needs_call(int session_held)
+{
+	return !session_held;
+}
+
+static inline int bt_session_after_call(int session_held, int powered, int result)
+{
+	if (session_held)
+		return 1;
+	if (!powered)
+		return 0;
+	if (result == BT_DISC_OK || result == BT_DISC_IN_PROGRESS)
+		return 1;
+	return 0;
+}
+
 static inline int bt_disc_is_active(int result, int property_discovering)
 {
 	if (result == BT_DISC_OK)
@@ -94,7 +127,40 @@ struct bt_seen {
 	char name[249];
 	int kind;
 	int paired;
+	int connected;
 };
+
+static inline int bt_seen_from_fields(struct bt_seen *out, const char *addr,
+				      const char *name, const char *alias,
+				      const char *icon, unsigned int class_val,
+				      int paired, int connected)
+{
+	char mac[18];
+	char label[249];
+	int kind;
+
+	if (!out)
+		return 0;
+	memset(out, 0, sizeof(*out));
+	bt_copy_term(mac, sizeof(mac), addr);
+	if (!bt_mac_ok(mac))
+		return 0;
+	bt_copy_term(out->addr, sizeof(out->addr), mac);
+	if (name && name[0])
+		bt_copy_term(label, sizeof(label), name);
+	else if (alias && alias[0])
+		bt_copy_term(label, sizeof(label), alias);
+	else
+		bt_copy_term(label, sizeof(label), mac);
+	bt_copy_term(out->name, sizeof(out->name), label);
+	kind = bt_kind_from_class(class_val);
+	if (!kind)
+		kind = bt_kind_from_icon(icon);
+	out->kind = kind;
+	out->paired = paired ? 1 : 0;
+	out->connected = connected ? 1 : 0;
+	return 1;
+}
 
 static inline int bt_paired_row_same(const char *a_name, int a_conn, int a_bonded,
 				     const char *b_name, int b_conn, int b_bonded)

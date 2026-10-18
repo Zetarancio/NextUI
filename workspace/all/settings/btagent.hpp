@@ -31,5 +31,6 @@ private:
     guint agent_reg_id = 0;
     guint signal_id = 0;
     bool agent_registered = false;
+    bool session_held = false;
 };
 } // namespace Bluetooth

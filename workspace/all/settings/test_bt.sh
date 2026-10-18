@@ -6,7 +6,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 fail() { echo "bt: $*" >&2; exit 1; }
 
-cc -std=c11 -Wall -Wextra -Werror -o "$work/policy" "$here/test_bt_policy.c"
+cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -o "$work/policy" "$here/test_bt_policy.c"
 "$work/policy"
 c++ -std=c++17 -Wall -Wextra -Werror -I"$here" -o "$work/layout" "$here/test_bt_layout.cpp"
 "$work/layout"
@@ -19,6 +19,9 @@ grep -q 'killall' "$bt" && fail "discovery still kills bluetoothctl"
 grep -q 'bt_disc_set' "$bt" || fail "no persistent discovery owner"
 grep -q 'bt_mac_ok' "$bt" || fail "mac is not validated"
 grep -q 'GetManagedObjects' "$agent" || fail "scan still depends on bluetoothctl devices"
+grep -q 'GetAll' "$agent" && fail "scan still calls GetAll per device"
+grep -q 'session_held' "$agent" || fail "discovery is not owned by this client"
+grep -q 'bt_copy_term' "$agent" || fail "copies are not terminated"
 grep -q 'StartDiscovery' "$agent" || fail "agent does not start discovery"
 grep -q 'StopDiscovery' "$agent" || fail "agent does not stop discovery"
 grep -q 'BT_DBUS_MS' "$agent" || fail "dbus calls can block forever"
