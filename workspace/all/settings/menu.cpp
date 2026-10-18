@@ -31,8 +31,12 @@ static void drawOverlayLocal(SDL_Surface* screen);
 void AbstractMenuItem::defer(bool on)
 {
     deferred = on;
-    if (on && submenu)
+    if (!submenu)
+        return;
+    if (on)
         submenu->onShow();
+    else
+        submenu->onHide();
 }
 
 void AbstractMenuItem::setSubMenu(MenuList *next)

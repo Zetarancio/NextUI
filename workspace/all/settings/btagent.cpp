@@ -1,3 +1,6 @@
+#ifndef PLATFORM
+#define PLATFORM ""
+#endif
 #include "btagent.hpp"
 #include "../common/bt_policy.h"
 #include <iostream>
@@ -61,6 +64,16 @@ void PairingAgent::startPairingWindow()
 {
     if (agent_registered)
         return;
+
+    /* g_dbus_connection_register_object dispatches Agent1 methods on
+     * the thread-default GMainContext. Settings is an SDL loop and does
+     * not iterate that context, so an exported agent would never answer.
+     * my355 already runs `bluetoothctl --agent=NoInputNoOutput` from
+     * S40bluetoothd. Do not replace that default agent. */
+    if (!bt_settings_registers_agent(PLATFORM)) {
+        std::cout << "Using the system pairing agent\n";
+        return;
+    }
 
     registerAgent();
     subscribeDeviceSignals();

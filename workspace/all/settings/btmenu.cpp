@@ -9,6 +9,7 @@
 #include <map>
 #include <stdexcept>
 
+#include <chrono>
 #include <mutex>
 #include <shared_mutex>
 typedef std::shared_mutex Lock;
@@ -49,7 +50,9 @@ Menu::Menu(const int &globalQuit, int &globalDirty) : MenuList(MenuItemType::Fix
 
 Menu::~Menu()
 {
-    quit = true;
+    page_active.store(false);
+    quit.store(true);
+    wake_cv.notify_all();
     if (worker.joinable())
         worker.join();
 
@@ -66,24 +69,36 @@ Menu::~Menu()
 #endif
 }
 
+void Menu::ensureWorker()
+{
+    if (workerStarted.exchange(true))
+        return;
+#ifdef HAS_BTAGENT
+    pairingAgent = new PairingAgent();
+    pairingAgent->startPairingWindow();
+    pairingAgent->bindDiscoveryOwner();
+#endif
+    worker = std::thread{&Menu::updater, this};
+}
+
+void Menu::onShow()
+{
+    ensureWorker();
+    page_active.store(true);
+    wake_cv.notify_all();
+}
+
+void Menu::onHide()
+{
+    page_active.store(false);
+    wake_cv.notify_all();
+}
+
 InputReactionHint Menu::handleInput(int &dirty, int &quit)
 {
-    if (!workerStarted) {
-        workerStarted = true;
-#ifdef HAS_BTAGENT
-        pairingAgent = new PairingAgent();
-        pairingAgent->startPairingWindow();
-        pairingAgent->bindDiscoveryOwner();
-#endif
-        worker = std::thread{&Menu::updater, this};
-    }
     auto ret = MenuList::handleInput(dirty, quit);
-    if (selectionDirty)
-    {
+    if (selectionDirty.exchange(false))
         dirty = true;
-        selectionDirty = false; // handled
-        //LOG_info("collected selectionDirty\n");
-    }
     return ret;
 }
 
@@ -96,7 +111,13 @@ void Menu::setBtToggleState(const std::any &on)
 {
     auto state = std::any_cast<bool>(on);
     ScopedOverlay overlay(state ? "Enabling Bluetooth..." : "Disabling Bluetooth...");
+#ifdef HAS_BTAGENT
+    if (!state && pairingAgent)
+        pairingAgent->stopDiscovery();
+#endif
     BT_enable(state);
+    if (state)
+        wake_cv.notify_all();
 }
 
 void Menu::resetBtToggleState()
@@ -173,13 +194,25 @@ void Menu::updater()
     std::map<std::string, BT_devicePaired> prevPaired;
     std::string prevBtConn;
 
-    while (!quit && !globalQuit)
+    while (!quit.load() && !globalQuit)
     {
+        if (!page_active.load())
+        {
+#ifdef HAS_BTAGENT
+            if (pairingAgent)
+                pairingAgent->stopDiscovery();
+#else
+            BT_discovery(false);
+#endif
+            std::unique_lock<std::mutex> lock(wake_mu);
+            wake_cv.wait(lock, [&] { return quit.load() || page_active.load(); });
+            continue;
+        }
         try
         {
         if (BT_enabled())
         {
-            if(!BT_discovering())
+            if (bt_page_should_acquire(page_active.load() ? 1 : 0, 1, BT_discovering() ? 1 : 0))
                 BT_discovery(true);
 
             std::map<std::string, BT_devicePaired> pairedMap;
@@ -278,7 +311,8 @@ void Menu::updater()
 
                 selectionApplied = selectByName(selectedName);
                 globalDirty |= selectionApplied;
-                selectionDirty |= !selectionApplied;
+                if (!selectionApplied)
+                    selectionDirty.store(true);
                 prevScan = scanMap;
                 prevPaired = pairedMap;
                 prevBtConn = btConn;
@@ -313,7 +347,7 @@ void Menu::updater()
                     items.push_back(toggleItem);
                     items.push_back(diagItem);
                     items.push_back(rateItem);
-                    selectionDirty = true;
+                    selectionDirty.store(true);
                     prevScan.clear();
                     prevPaired.clear();
                     prevBtConn.clear();
@@ -324,11 +358,8 @@ void Menu::updater()
             pollSecs = 15;
         }
 
-        if (selectionDirty)
-        {
+        if (selectionDirty.load())
             MenuList::performLayout((SDL_Rect){0, 0, FIXED_WIDTH, FIXED_HEIGHT});
-            selectionDirty = false;
-        }
         }
         catch (const std::exception &e)
         {
@@ -336,11 +367,22 @@ void Menu::updater()
             pollSecs = 15;
         }
 
-        std::this_thread::sleep_for(std::chrono::seconds(pollSecs));
+        {
+            std::unique_lock<std::mutex> lock(wake_mu);
+            wake_cv.wait_for(lock, std::chrono::seconds(pollSecs), [&] {
+                return quit.load() || !page_active.load();
+            });
+        }
     }
+#ifdef HAS_BTAGENT
+    if (pairingAgent)
+        pairingAgent->stopDiscovery();
+#else
+    BT_discovery(false);
+#endif
 }
 
-PairNewItem::PairNewItem(BT_device d, bool& dirty)
+PairNewItem::PairNewItem(BT_device d, std::atomic<bool>& dirty)
     : MenuItem(ListItemType::Button, "Pair", "Pair this device.", 
         [&](AbstractMenuItem &item) -> InputReactionHint {
             ScopedOverlay overlay("Pairing...");
@@ -350,7 +392,7 @@ PairNewItem::PairNewItem(BT_device d, bool& dirty)
         }), dev(d)
 {}
 
-UnpairItem::UnpairItem(BT_devicePaired d, bool& dirty)
+UnpairItem::UnpairItem(BT_devicePaired d, std::atomic<bool>& dirty)
     : MenuItem(ListItemType::Button, "Forget", "Forget this device.",
         [&](AbstractMenuItem &item) -> InputReactionHint {
             BT_unpair(dev.remote_addr); 
@@ -359,7 +401,7 @@ UnpairItem::UnpairItem(BT_devicePaired d, bool& dirty)
         }), dev(d)
 {}
 
-ConnectKnownItem::ConnectKnownItem(BT_devicePaired d, bool& dirty)
+ConnectKnownItem::ConnectKnownItem(BT_devicePaired d, std::atomic<bool>& dirty)
     : MenuItem(ListItemType::Button, "Connect", "Connect this device.",
         [&](AbstractMenuItem &item) -> InputReactionHint {
             ScopedOverlay overlay("Connecting...");
@@ -369,7 +411,7 @@ ConnectKnownItem::ConnectKnownItem(BT_devicePaired d, bool& dirty)
         }), dev(d)
 {}
 
-DisconnectKnownItem::DisconnectKnownItem(BT_devicePaired d, bool& dirty)
+DisconnectKnownItem::DisconnectKnownItem(BT_devicePaired d, std::atomic<bool>& dirty)
     : MenuItem(ListItemType::Button, "Disconnect", "Disconnect this device.",
         [&](AbstractMenuItem &item) -> InputReactionHint {
             BT_disconnect(dev.remote_addr); 

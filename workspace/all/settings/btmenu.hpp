@@ -1,6 +1,9 @@
 #pragma once
 
 #include "menu.hpp"
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <thread>
 
 namespace Bluetooth
@@ -19,9 +22,12 @@ namespace Bluetooth
         MenuItem *rateItem;
         
         std::thread worker;
-        bool quit = false;
-        bool selectionDirty = false;
-        bool workerStarted = false;
+        std::atomic<bool> quit{false};
+        std::atomic<bool> page_active{false};
+        std::atomic<bool> selectionDirty{false};
+        std::atomic<bool> workerStarted{false};
+        std::mutex wake_mu;
+        std::condition_variable wake_cv;
         
         PairingAgent* pairingAgent = nullptr;
     public:
@@ -29,6 +35,8 @@ namespace Bluetooth
         ~Menu();
 
         InputReactionHint handleInput(int &dirty, int &quit) override;
+        void onShow() override;
+        void onHide() override;
 
     private:
         std::any getBtToggleState() const;
@@ -44,6 +52,7 @@ namespace Bluetooth
         void resetSamplerateMaximum();
 
         void updater();
+        void ensureWorker();
     };
 
     class PairableItem : public MenuItem
@@ -70,14 +79,14 @@ namespace Bluetooth
     {
         BT_devicePaired dev;
     public:
-        ConnectKnownItem(BT_devicePaired n, bool& dirty);
+        ConnectKnownItem(BT_devicePaired n, std::atomic<bool>& dirty);
     };
 
     class DisconnectKnownItem : public MenuItem
     {
         BT_devicePaired dev;
     public:
-        DisconnectKnownItem(BT_devicePaired n, bool& dirty);
+        DisconnectKnownItem(BT_devicePaired n, std::atomic<bool>& dirty);
     };
 
     class PairNewItem : public MenuItem
@@ -85,7 +94,7 @@ namespace Bluetooth
         BT_device dev;
 
     public:
-        PairNewItem(BT_device n, bool& dirty);
+        PairNewItem(BT_device n, std::atomic<bool>& dirty);
     };
 
     class UnpairItem : public MenuItem
@@ -93,6 +102,6 @@ namespace Bluetooth
         BT_devicePaired dev;
 
     public:
-        UnpairItem(BT_devicePaired n, bool& dirty);
+        UnpairItem(BT_devicePaired n, std::atomic<bool>& dirty);
     };
 }

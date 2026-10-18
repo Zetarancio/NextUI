@@ -89,6 +89,35 @@ static inline int bt_disc_classify(int powered, const char *err)
 /* Another client's Discovering property is not our session.
  * Call StartDiscovery unless this connection already holds one.
  * InProgress means BlueZ already recorded this client. */
+/* my355 keeps zlyme-bluetooth's bluetoothctl agent. Settings does not
+ * export Agent1: GDBus method calls need a running GMainContext, and
+ * Settings does not iterate one. */
+static inline int bt_settings_registers_agent(const char *platform)
+{
+	return platform != NULL && strcmp(platform, "my355") != 0;
+}
+
+/* Discovery runs only while the Bluetooth page is the active menu. */
+static inline int bt_page_should_poll(int page_active)
+{
+	return page_active != 0;
+}
+
+static inline int bt_page_should_acquire(int page_active, int radio_on, int session_held)
+{
+	return page_active && radio_on && !session_held;
+}
+
+static inline int bt_page_should_release(int page_active, int session_held)
+{
+	return !page_active && session_held;
+}
+
+static inline int bt_kind_is_audio(int kind)
+{
+	return kind == 1;
+}
+
 static inline int bt_disc_needs_call(int session_held)
 {
 	return !session_held;

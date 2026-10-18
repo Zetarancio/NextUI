@@ -75,6 +75,28 @@ int main(void)
 		check(!bt_session_after_call(0, 0, BT_DISC_OK), "powered off");
 		check(!bt_session_after_call(0, 1, BT_DISC_FAILED), "failed start is not held");
 		check(!bt_session_after_call(0, 1, BT_DISC_NOT_READY), "not ready retries later");
+		check(!bt_settings_registers_agent("my355"), "my355 keeps the system agent");
+		check(bt_settings_registers_agent("tg5040"), "other platforms keep their agent");
+		check(!bt_settings_registers_agent(NULL), "missing platform does not invent an agent");
+		check(bt_page_should_acquire(1, 1, 0), "active page acquires discovery");
+		check(!bt_page_should_acquire(0, 1, 0), "hidden page does not acquire");
+		check(!bt_page_should_acquire(1, 0, 0), "radio off does not acquire");
+		check(!bt_page_should_acquire(1, 1, 1), "held session is not acquired twice");
+		check(bt_page_should_release(0, 1), "leaving the page releases the session");
+		check(!bt_page_should_release(1, 1), "open page keeps the session");
+		check(!bt_page_should_poll(0), "inactive page does not poll");
+		check(bt_page_should_poll(1), "active page may poll");
+		check(bt_page_should_acquire(1, 1, 0) && bt_disc_needs_call(0), "re-entry acquires again");
+		check(!bt_session_after_call(0, 1, BT_DISC_GONE), "bluez gone drops ownership");
+		check(bt_session_after_call(0, 1, BT_DISC_OK), "bluez return can acquire");
+		check(!bt_kind_is_audio(2), "connected HID is not audio");
+		check(!bt_kind_is_audio(0), "unknown class is not audio");
+		check(bt_kind_is_audio(1), "audio class is audio");
+		{
+			struct bt_seen hid;
+			check(bt_seen_from_fields(&hid, mac, "Pad", NULL, "input-gaming", 0x000508, 1, 1), "hid fields");
+			check(hid.kind == 2 && hid.connected && !bt_kind_is_audio(hid.kind), "paired controller stays a controller");
+		}
 		(void)i;
 	}
 	if (fails)

@@ -380,8 +380,10 @@ public:
     void drawMain(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rect &dstTitle);
     void drawMainItem(SDL_Surface *surface, const SDL_Rect &dst, const AbstractMenuItem &item, bool selected);
     virtual void drawCustom(SDL_Surface *surface, const SDL_Rect &dst, const SDL_Rect &dstTitle) {};
-    // Called when a parent item defers into this list (keyboard re-entry, etc).
+    // Called when a parent item defers into this list, and when that
+    // deferral ends. Bluetooth discovery follows these, not destruction.
     virtual void onShow() {}
+    virtual void onHide() {}
 };
 
 // Moved here to ensure MenuList is fully defined
