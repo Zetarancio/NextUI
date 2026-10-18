@@ -44,6 +44,11 @@ CXXFLAGS += -DHAS_BTAGENT
 CXXSOURCE += btagent.cpp
 CXXFLAGS += $$(pkg-config --cflags --libs gio-2.0 glib-2.0)
 endif
+ifeq ($(PLATFORM), my355)
+CXXFLAGS += -DHAS_BTAGENT
+CXXSOURCE += btagent.cpp
+CXXFLAGS += $$(pkg-config --cflags --libs gio-2.0 glib-2.0)
+endif
 
 PRODUCT= build/$(PLATFORM)/$(TARGET).elf
 

@@ -18,6 +18,7 @@
 #include "platform.h"
 #include "api.h"
 #include "utils.h"
+#include "bt_policy.h"
 
 #include <pthread.h>
 #include <unistd.h>
@@ -95,8 +96,21 @@ typedef struct bt_dev_node {
 
 static bt_dev_node_t *discovered_devices = NULL;
 static pthread_mutex_t discovered_devices_mtx = PTHREAD_MUTEX_INITIALIZER;
-static volatile bool bt_discovering = false;
 static volatile bool bt_initialized = false;
+static int (*bt_disc_set)(int on) = NULL;
+static int (*bt_disc_get)(void) = NULL;
+static int (*bt_scan_fn)(struct bt_seen *out, int max) = NULL;
+
+void PLAT_bluetoothSetDiscoveryOwner(int (*set_fn)(int on), int (*get_fn)(void))
+{
+	bt_disc_set = set_fn;
+	bt_disc_get = get_fn;
+}
+
+void PLAT_bluetoothSetScanOwner(int (*fn)(struct bt_seen *out, int max))
+{
+	bt_scan_fn = fn;
+}
 
 // Helper to run a command and capture output. bluetoothctl has no
 // deadline on this BusyBox; a hung D-Bus call froze NextUI's UI thread.
@@ -302,34 +316,50 @@ void PLAT_bluetoothDiagnosticsEnable(bool on) {
 }
 
 void PLAT_bluetoothDiscovery(int on) {
-	if (on) {
-		btlog("Starting BT discovery.\n");
-		bt_clear_discovered_devices();
-		/* dbus, not a leftover bluetoothctl. 8733bu drops HID
-		 * while scan is running (ROCKNIX sleep.sh / Spruce stop). */
-		runCmdTimeout("dbus-send --system --type=method_call --dest=org.bluez /org/bluez/hci0 org.bluez.Adapter1.StartDiscovery >/dev/null 2>&1", NULL, 0, 1000);
-		bt_discovering = true;
-	} else {
-		btlog("Stopping BT discovery.\n");
-		runCmdTimeout("dbus-send --system --type=method_call --dest=org.bluez /org/bluez/hci0 org.bluez.Adapter1.StopDiscovery >/dev/null 2>&1", NULL, 0, 1000);
-		/* Do not `bluetoothctl scan off` — it blocks forever. */
-		runCmdTimeout("killall -9 bluetoothctl >/dev/null 2>&1", NULL, 0, 500);
-		bt_discovering = false;
+	/* BlueZ drops a discovery session when the calling D-Bus connection
+	 * closes. A one-shot client cannot own one. The Settings agent
+	 * registers the owner and this function does not signal every
+	 * bluetoothctl process on the system. */
+	if (bt_disc_set) {
+		btlog("%s BT discovery.\n", on ? "Starting" : "Stopping");
+		if (on)
+			bt_clear_discovered_devices();
+		bt_disc_set(on);
+		return;
 	}
+	btlog("BT discovery %s has no owner.\n", on ? "start" : "stop");
 }
 
 bool PLAT_bluetoothDiscovering() {
-	return bt_discovering;
+	if (!bt_disc_get)
+		return false;
+	return bt_disc_get() != 0;
 }
 
 int PLAT_bluetoothScan(struct BT_device *devices, int max) {
+	char output[8192];
+	struct bt_seen seen[MAX_DISCOVERED_DEVICES];
+	int n, i;
+
 	if (!CFG_getBluetooth()) {
 		return 0;
 	}
-	
-	// Get list of discovered devices from bluetoothctl
-	char output[8192];
-	if (bt_run_cmd("bluetoothctl devices 2>/dev/null", output, sizeof(output)) != 0) {
+
+	output[0] = '\0';
+	if (bt_scan_fn) {
+		n = bt_scan_fn(seen, MAX_DISCOVERED_DEVICES);
+		if (n < 0)
+			n = 0;
+		if (n > MAX_DISCOVERED_DEVICES)
+			n = MAX_DISCOVERED_DEVICES;
+		bt_clear_discovered_devices();
+		for (i = 0; i < n; i++) {
+			if (seen[i].paired || !bt_mac_ok(seen[i].addr))
+				continue;
+			bt_add_discovered_device(seen[i].addr, seen[i].name,
+						 (BluetoothDeviceType)seen[i].kind);
+		}
+	} else if (bt_run_cmd("bluetoothctl devices 2>/dev/null", output, sizeof(output)) != 0) {
 		btlog("Failed to get device list\n");
 		return 0;
 	}
@@ -341,21 +371,21 @@ int PLAT_bluetoothScan(struct BT_device *devices, int max) {
 		char name[249] = {0};
 		
 		// Parse "Device XX:XX:XX:XX:XX:XX Name"
-		if (strncmp(line, "Device ", 7) == 0) {
-			if (sscanf(line, "Device %17s", addr) == 1) {
-				// Get name (everything after the address)
-				char *name_start = line + 7 + 18; // "Device " + "XX:XX:XX:XX:XX:XX "
-				if (*name_start) {
+		if (strncmp(line, "Device ", 7) == 0 && strlen(line) >= 7 + 17) {
+			const char *rest = line + 7;
+			const char *name_start;
+
+			memcpy(addr, rest, 17);
+			addr[17] = '\0';
+			if (bt_mac_ok(addr)) {
+				name_start = rest + 17;
+				if (*name_start == ' ')
+					name_start++;
+				if (*name_start)
 					strncpy(name, name_start, sizeof(name) - 1);
-				}
-				
-				// Get device type
-				BluetoothDeviceType kind = bt_get_device_type(addr);
-				
-				// Only add audio and controller devices, skip unknowns for scan results
-				if (kind == BLUETOOTH_AUDIO || kind == BLUETOOTH_CONTROLLER) {
-					bt_add_discovered_device(addr, name, kind);
-				}
+				/* Unknown class stays BLUETOOTH_NONE and is still listed.
+				 * Nothing here connects to it. */
+				bt_add_discovered_device(addr, name, bt_get_device_type(addr));
 			}
 		}
 		line = strtok(NULL, "\n");
@@ -417,13 +447,18 @@ int PLAT_bluetoothPaired(struct BT_devicePaired *paired, int max) {
 		char name[249] = {0};
 		
 		// Parse "Device XX:XX:XX:XX:XX:XX Name"
-		if (strncmp(line, "Device ", 7) == 0) {
-			if (sscanf(line, "Device %17s", addr) == 1) {
-				// Get name (everything after the address)
-				char *name_start = line + 7 + 18;
-				if (*name_start) {
+		if (strncmp(line, "Device ", 7) == 0 && strlen(line) >= 7 + 17) {
+			const char *rest = line + 7;
+			const char *name_start;
+
+			memcpy(addr, rest, 17);
+			addr[17] = '\0';
+			if (bt_mac_ok(addr)) {
+				name_start = rest + 17;
+				if (*name_start == ' ')
+					name_start++;
+				if (*name_start)
 					strncpy(name, name_start, sizeof(name) - 1);
-				}
 				
 				struct BT_devicePaired *device = &paired[count];
 				strncpy(device->remote_addr, addr, sizeof(device->remote_addr) - 1);

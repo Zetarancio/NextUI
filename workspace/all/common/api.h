@@ -935,6 +935,10 @@ void PLAT_bluetoothDiagnosticsEnable(bool on);
 // enables or disabled bt discovery.
 void PLAT_bluetoothDiscovery(int on);
 bool PLAT_bluetoothDiscovering();
+/* Settings owns discovery on one D-Bus connection. NULL clears it. */
+void PLAT_bluetoothSetDiscoveryOwner(int (*set_fn)(int on), int (*get_fn)(void));
+struct bt_seen;
+void PLAT_bluetoothSetScanOwner(int (*fn)(struct bt_seen *out, int max));
 // returns the list of available devices
 int PLAT_bluetoothScan(struct BT_device *devices, int max);
 // returns the list of paired devices

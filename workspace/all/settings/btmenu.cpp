@@ -1,5 +1,6 @@
 #include "btmenu.hpp"
 #include "keyboardprompt.hpp"
+#include "../common/bt_policy.h"
 #ifdef HAS_BTAGENT
 #   include "btagent.hpp"
 #endif
@@ -52,14 +53,16 @@ Menu::~Menu()
     if (worker.joinable())
         worker.join();
 
-    BT_discovery(false);
-
 #ifdef HAS_BTAGENT
     if (pairingAgent) {
+        pairingAgent->stopDiscovery();
+        pairingAgent->unbindDiscoveryOwner();
         pairingAgent->stopPairingWindow();
         delete pairingAgent;
         pairingAgent = nullptr;
     }
+#else
+    BT_discovery(false);
 #endif
 }
 
@@ -70,6 +73,7 @@ InputReactionHint Menu::handleInput(int &dirty, int &quit)
 #ifdef HAS_BTAGENT
         pairingAgent = new PairingAgent();
         pairingAgent->startPairingWindow();
+        pairingAgent->bindDiscoveryOwner();
 #endif
         worker = std::thread{&Menu::updater, this};
     }
@@ -130,12 +134,36 @@ void Menu::resetSamplerateMaximum()
     CFG_setBluetoothSamplingrateLimit(CFG_DEFAULT_BLUETOOTH_MAXRATE);
 }
 
-template <typename Map>
-bool key_compare(Map const &lhs, Map const &rhs)
+static bool scan_same(const std::map<std::string, BT_device> &lhs,
+                      const std::map<std::string, BT_device> &rhs)
 {
-    return lhs.size() == rhs.size() && std::equal(lhs.begin(), lhs.end(), rhs.begin(),
-                                                  [](auto a, auto b)
-                                                  { return a.first == b.first; });
+    if (lhs.size() != rhs.size())
+        return false;
+    for (const auto &item : lhs) {
+        auto it = rhs.find(item.first);
+        if (it == rhs.end())
+            return false;
+        if (!bt_scan_row_same(item.second.addr, item.second.name, item.second.kind,
+                              it->second.addr, it->second.name, it->second.kind))
+            return false;
+    }
+    return true;
+}
+
+static bool paired_same(const std::map<std::string, BT_devicePaired> &lhs,
+                        const std::map<std::string, BT_devicePaired> &rhs)
+{
+    if (lhs.size() != rhs.size())
+        return false;
+    for (const auto &item : lhs) {
+        auto it = rhs.find(item.first);
+        if (it == rhs.end())
+            return false;
+        if (!bt_paired_row_same(item.second.remote_name, item.second.is_connected, item.second.is_bonded,
+                                it->second.remote_name, it->second.is_connected, it->second.is_bonded))
+            return false;
+    }
+    return true;
 }
 
 void Menu::updater()
@@ -180,8 +208,8 @@ void Menu::updater()
             for (auto &[s, r] : pairedMap)
                 if (r.is_connected)
                     btConn += s;
-            bool sameScan = key_compare(prevScan, scanMap) &&
-                            key_compare(prevPaired, pairedMap) &&
+            bool sameScan = scan_same(prevScan, scanMap) &&
+                            paired_same(prevPaired, pairedMap) &&
                             prevBtConn == btConn;
 
             bool menuOpen = false;
@@ -364,8 +392,10 @@ void PairableItem::drawCustomItem(SDL_Surface *surface, const SDL_Rect &dst, con
         GFX_blitPillLightCPP(ASSET_BUTTON, surface, nativeButtonRect(dst.x, dst.y, mw, dst.h));
     }
 
-    if(dev.kind != BLUETOOTH_NONE) {
-        auto asset = (dev.kind == BLUETOOTH_AUDIO) ? ASSET_AUDIO : ASSET_CONTROLLER;
+    {
+        auto asset = (dev.kind == BLUETOOTH_AUDIO) ? ASSET_AUDIO :
+                     (dev.kind == BLUETOOTH_CONTROLLER) ? ASSET_CONTROLLER :
+                     ASSET_BLUETOOTH;
         SDL_Rect rect = {0, 0, 12, 12};
         int ix = dst.x + dst.w - SCALE1(OPTION_PADDING + rect.w);
         int y = dst.y + SCALE1(PILL_SIZE - rect.h) / 2;
