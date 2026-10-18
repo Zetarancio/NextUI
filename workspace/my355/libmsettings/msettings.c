@@ -393,8 +393,9 @@ void SetRawVolume(int val)
 		val = 0;
 	if (val > 100)
 		val = 100;
-	/* FlipVolume is the one softvol on rk817ext. zlyme-jackd owns the mux. */
-	snprintf(cmd, sizeof(cmd), "amixer -q sset FlipVolume %i%%", val);
+	/* Pulse is the playback level. zlyme-audio falls back to FlipVolume
+	 * only while that server is down. zlyme-jackd still owns the mux. */
+	snprintf(cmd, sizeof(cmd), "zlyme-audio setSystemVolume %i >/dev/null 2>&1", val);
 	if (system(cmd) != 0)
 		/* control appears the first time a PCM opens; ignore */;
 }

@@ -596,32 +596,27 @@ bool PLAT_bluetoothConnected() {
 }
 
 int PLAT_bluetoothVolume() {
-	// Try to get volume from ALSA mixer for bluealsa
-	char output[256];
-	int vol = 100; // Default to 100%
-	
-	// Try bluealsa-aplay volume or amixer
-	if (bt_run_cmd("amixer -D bluealsa get 'A2DP' 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'", output, sizeof(output)) == 0) {
-		int parsed_vol;
-		if (sscanf(output, "%d", &parsed_vol) == 1) {
-			vol = parsed_vol;
-		}
+	char output[64];
+	int vol = 0;
+
+	/* Same 0-100 level as the speaker, jack, and HDMI. */
+	if (bt_run_cmd("zlyme-audio getSystemVolume 2>/dev/null", output, sizeof(output)) == 0) {
+		int parsed = 0;
+		if (sscanf(output, "%d", &parsed) == 1)
+			vol = parsed;
 	}
-	
-	btlog("BT volume: %d\n", vol);
 	return vol;
 }
 
 void PLAT_bluetoothSetVolume(int vol) {
-	if (vol > 100) vol = 100;
-	if (vol < 0) vol = 0;
-	
-	char cmd[256];
-	// Try to set bluealsa volume
-	snprintf(cmd, sizeof(cmd), "amixer -D bluealsa set 'A2DP' %d%% 2>/dev/null", vol);
+	char cmd[96];
+
+	if (vol > 100)
+		vol = 100;
+	if (vol < 0)
+		vol = 0;
+	snprintf(cmd, sizeof(cmd), "zlyme-audio setSystemVolume %d >/dev/null 2>&1", vol);
 	runCmdTimeout(cmd, NULL, 0, BT_CMD_MS);
-	
-	btlog("Set BT volume: %d\n", vol);
 }
 
 // bt_device_watcher.c
