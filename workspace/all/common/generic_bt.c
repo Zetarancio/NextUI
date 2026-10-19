@@ -422,26 +422,54 @@ int PLAT_bluetoothScan(struct BT_device *devices, int max) {
 }
 
 int PLAT_bluetoothPaired(struct BT_devicePaired *paired, int max) {
+	char output[8192];
+	int ret;
+	int count = 0;
+	char *line;
+
 	if (!CFG_getBluetooth()) {
 		return 0;
 	}
-	
-	// Get list of paired devices - try both command formats
-	char output[8192];
-	int ret = bt_run_cmd("bluetoothctl paired-devices 2>/dev/null", output, sizeof(output));
-	
-	// If paired-devices doesn't work (5.78+), try alternative command
-	if (ret != 0 || strlen(output) == 0) {
-		ret = bt_run_cmd("bluetoothctl devices Paired 2>/dev/null", output, sizeof(output));
+
+	/* my355's scan owner is one GetManagedObjects snapshot. BlueZ
+	 * 5.86 lists known devices with "devices Paired" only. That
+	 * command exits 0 with no rows when this short-lived client
+	 * has no controller yet, and the scan list skips bonded
+	 * devices, so both rows disappear. */
+	if (bt_scan_fn) {
+		struct bt_seen seen[MAX_DISCOVERED_DEVICES];
+		int n = bt_scan_fn(seen, MAX_DISCOVERED_DEVICES);
+		int i;
+
+		if (n < 0)
+			n = 0;
+		if (n > MAX_DISCOVERED_DEVICES)
+			n = MAX_DISCOVERED_DEVICES;
+		for (i = 0; i < n && count < max; i++) {
+			struct BT_devicePaired *device;
+
+			if (!bt_inventory_is_paired(&seen[i]))
+				continue;
+			device = &paired[count];
+			memset(device, 0, sizeof(*device));
+			strncpy(device->remote_addr, seen[i].addr, sizeof(device->remote_addr) - 1);
+			strncpy(device->remote_name, seen[i].name, sizeof(device->remote_name) - 1);
+			device->is_bonded = true;
+			device->is_connected = seen[i].connected ? true : false;
+			device->rssi = -50;
+			count++;
+		}
+		return count;
 	}
+
+	ret = bt_run_cmd("bluetoothctl devices Paired 2>/dev/null", output, sizeof(output));
 	
 	if (ret != 0) {
 		btlog("Failed to get paired device list\n");
 		return 0;
 	}
 	
-	int count = 0;
-	char *line = strtok(output, "\n");
+	line = strtok(output, "\n");
 	while (line && count < max) {
 		char addr[18] = {0};
 		char name[249] = {0};

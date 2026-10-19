@@ -199,4 +199,16 @@ static inline int bt_paired_row_same(const char *a_name, int a_conn, int a_bonde
 	return strcmp(a_name, b_name) == 0 && a_conn == b_conn && a_bonded == b_bonded;
 }
 
+/* One GetManagedObjects snapshot feeds both rows. A paired device is
+ * not also a scan row. An unpaired device is not a known row. */
+static inline int bt_inventory_is_paired(const struct bt_seen *row)
+{
+	return row && row->paired && bt_mac_ok(row->addr);
+}
+
+static inline int bt_inventory_is_new(const struct bt_seen *row)
+{
+	return row && !row->paired && bt_mac_ok(row->addr);
+}
+
 #endif

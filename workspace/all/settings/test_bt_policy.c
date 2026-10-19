@@ -1,5 +1,6 @@
 #include "../common/bt_policy.h"
 #include <stdio.h>
+#include <string.h>
 
 static int fails;
 
@@ -41,6 +42,20 @@ int main(void)
 	check(!bt_scan_row_same("AA:BB:CC:DD:EE:FF", "Pad", 2, "AA:BB:CC:DD:EE:FF", "Pad 2", 2), "rename redraws");
 	check(!bt_scan_row_same("AA:BB:CC:DD:EE:FF", "Pad", 0, "AA:BB:CC:DD:EE:FF", "Pad", 2), "class change redraws");
 	check(!bt_paired_row_same("Pad", 0, 1, "Pad", 1, 1), "connect redraws");
+	{
+		struct bt_seen rows[3];
+		memset(rows, 0, sizeof(rows));
+		bt_seen_from_fields(&rows[0], "AA:BB:CC:DD:EE:01", "Buds", NULL, "audio-headset", 0, 1, 0);
+		bt_seen_from_fields(&rows[1], "AA:BB:CC:DD:EE:02", "Pad", NULL, "input-gaming", 0, 0, 1);
+		bt_seen_from_fields(&rows[2], "AA:BB:CC:DD:EE:01", "Buds", NULL, "audio-headset", 0, 1, 1);
+		check(bt_inventory_is_paired(&rows[0]), "bonded headset is a known row");
+		check(!bt_inventory_is_new(&rows[0]), "bonded headset is not a scan row");
+		check(bt_inventory_is_new(&rows[1]), "unpaired pad is a scan row");
+		check(!bt_inventory_is_paired(&rows[1]), "unpaired pad is not known");
+		check(rows[0].connected == 0, "known device can be disconnected");
+		check(rows[2].connected == 1, "known device can be connected");
+		check(strcmp(rows[0].addr, rows[2].addr) == 0, "same address is one device");
+	}
 	{
 		char buf[18];
 		char name[249];
