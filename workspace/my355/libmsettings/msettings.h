@@ -40,10 +40,10 @@ void SetVolume(int value); // 0-20
 int GetJack(void);
 void SetJack(int value); // 0-1
 
-#define AUDIO_SINK_DEFAULT 0 // codec: speaker or jack via zlyme-jackd
-#define AUDIO_SINK_BLUETOOTH 1 // software control via bluealsa, not a separate card
-#define AUDIO_SINK_USBDAC 2 // assumes being exposed as card 1 to alsa
-#define AUDIO_SINK_HDMI 3 // HDMI PCM via asound.conf flipsink_hdmi
+#define AUDIO_SINK_DEFAULT 0 // auto: A2DP, then HDMI with audio, then the codec
+#define AUDIO_SINK_BLUETOOTH 1 // explicit Bluetooth audio
+#define AUDIO_SINK_USBDAC 2 // unused on my355
+#define AUDIO_SINK_HDMI 3 // explicit HDMI audio
 int GetAudioSink(void);
 void SetAudioSink(int value);
 

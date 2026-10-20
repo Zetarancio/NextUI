@@ -393,11 +393,10 @@ void SetRawVolume(int val)
 		val = 0;
 	if (val > 100)
 		val = 100;
-	/* Pulse is the playback level. zlyme-audio falls back to FlipVolume
-	 * only while that server is down. zlyme-jackd still owns the mux. */
+	/* PipeWire is the playback level. zlyme-jackd still owns the mux. */
 	snprintf(cmd, sizeof(cmd), "zlyme-audio setSystemVolume %i >/dev/null 2>&1", val);
 	if (system(cmd) != 0)
-		/* control appears the first time a PCM opens; ignore */;
+		fprintf(stderr, "zlyme-audio setSystemVolume %d failed\n", val);
 }
 
 void SetVolume(int value)
@@ -437,9 +436,8 @@ int GetHDMI(void)
 void SetHDMI(int value)
 {
 	settings->hdmi = value;
-	if (value)
-		SetRawVolume(100);
-	else
+	/* The display switch must not rewrite the playback gain. */
+	if (!value)
 		SetVolume(GetVolume());
 }
 
@@ -513,7 +511,7 @@ int GetAudioSink(void)
 
 void SetAudioSink(int value)
 {
-	const char *sink = "codec";
+	const char *sink = "auto";
 
 	if (value == AUDIO_SINK_BLUETOOTH)
 		sink = "bt";
@@ -527,7 +525,7 @@ void SetAudioSink(int value)
 
 	snprintf(cmd, sizeof(cmd), "zlyme-audio set %s >/dev/null 2>&1", sink);
 	if (system(cmd) != 0)
-		/* sink file may be missing before the card is mounted */;
+		fprintf(stderr, "zlyme-audio set %s failed\n", sink);
 	SetVolume(GetVolume());
 }
 

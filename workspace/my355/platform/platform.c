@@ -592,7 +592,9 @@ void PLAT_powerOff(int reboot) {
 	system("rm -f /tmp/nextui_exec && sync");
 	sleep(2);
 
-	SetRawVolume(MUTE_VOLUME_RAW);
+	/* Do not store this. The saved percent is the next boot's volume. */
+	if (system("zlyme-audio hold 0 >/dev/null 2>&1") != 0)
+		fprintf(stderr, "zlyme-audio hold 0 failed\n");
 	system("zlyme-led poweroff >/dev/null 2>&1");
 	PLAT_enableBacklight(0);
 	SND_quit();
