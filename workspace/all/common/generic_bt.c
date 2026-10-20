@@ -567,32 +567,15 @@ void PLAT_bluetoothUnpair(char *addr) {
 	runCmdTimeout("zlyme-bluetooth save >/dev/null 2>&1", NULL, 0, BT_CMD_MS);
 }
 
-static int bt_addr_is_audio(const char *addr)
-{
-	char cmd[320];
-	char output[4096];
-
-	if (!addr || !addr[0])
-		return 0;
-	snprintf(cmd, sizeof(cmd), "bluetoothctl info %s 2>/dev/null", addr);
-	if (bt_run_cmd(cmd, output, sizeof(output)) != 0)
-		return 0;
-	if (strstr(output, "0000110b") || strstr(output, "Audio Sink") || strstr(output, "A2DP"))
-		return 1;
-	return 0;
-}
-
 void PLAT_bluetoothConnect(char *addr) {
 	btlog("Connecting to %s\n", addr);
 	
 	char cmd[256];
 	snprintf(cmd, sizeof(cmd), "bluetoothctl connect %s 2>/dev/null", addr);
 	runCmdTimeout(cmd, NULL, 0, BT_RADIO_MS);
-	/* bluetoothctl often returns 1 after a successful connect. */
-	if (bt_addr_is_audio(addr)) {
-		runCmdTimeout("zlyme-audio set bt >/dev/null 2>&1", NULL, 0, BT_CMD_MS);
-		SetAudioSink(AUDIO_SINK_BLUETOOTH);
-	}
+	/* bluetoothctl often returns 1 after a successful connect.
+	 * Leave the saved preference alone. auto selects an A2DP sink
+	 * when that node exists. */
 }
 
 void PLAT_bluetoothDisconnect(char *addr) {
@@ -603,7 +586,7 @@ void PLAT_bluetoothDisconnect(char *addr) {
 	int ret = runCmdTimeout(cmd, NULL, 0, BT_RADIO_MS);
 	if (ret != 0 && ret != 124)
 		LOG_error("BT disconnect failed: %d\n", ret);
-	/* zlyme-btsink recomputes HDMI-if-ELD else codec. Do not force codec. */
+	/* Do not write a sink preference. The route follows what is connected. */
 }
 
 bool PLAT_bluetoothConnected() {
