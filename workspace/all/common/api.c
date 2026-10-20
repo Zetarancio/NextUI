@@ -2283,9 +2283,16 @@ SDL_Surface* GFX_createScreenFormatSurface(int width, int height)
 
 static int zlyme_route_is_external(void)
 {
+	static unsigned long last_ms;
+	static int cached;
 	FILE *f;
 	char role[16];
+	unsigned long now = SDL_GetTicks();
 
+	if (last_ms && now - last_ms < 500)
+		return cached;
+	last_ms = now;
+	cached = 0;
 	f = fopen("/run/zlyme/pipewire/active", "r");
 	if (!f)
 		return 0;
@@ -2294,8 +2301,9 @@ static int zlyme_route_is_external(void)
 		return 0;
 	}
 	fclose(f);
-	return strcmp(role, "bt\n") == 0 || strcmp(role, "bt") == 0
+	cached = strcmp(role, "bt\n") == 0 || strcmp(role, "bt") == 0
 		|| strcmp(role, "hdmi\n") == 0 || strcmp(role, "hdmi") == 0;
+	return cached;
 }
 
 int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
@@ -2319,8 +2327,9 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 		// no need to handle in PLAT_updateNetworkStatus,
 		// this one is async anyway
 		int show_bt = BT_isConnected();
-		int show_external_audio = GetAudioSink() != AUDIO_SINK_DEFAULT
-			|| zlyme_route_is_external();
+		/* The mark follows the route that is actually playing.
+		 * An explicit preference with no such node stays off. */
+		int show_external_audio = zlyme_route_is_external();
 		bool show_clock = CFG_getShowClock();
 		SDL_Rect battery_rect = asset_rects[ASSET_BATTERY];
 
