@@ -92,20 +92,18 @@ int zlyme_recent_user_path(char *out, size_t out_len, const char *shared)
 	return artbook_write(out, out_len, path);
 }
 
-int zlyme_recent_bg_choice(int legacy, int user, int global, int firmware, int *artbook)
+int zlyme_recent_bg_choice(int user, int global, int firmware, int *artbook)
 {
 	if (artbook)
 		*artbook = 0;
-	if (legacy)
-		return 1;
 	if (user)
-		return 2;
+		return 1;
 	if (global)
-		return 3;
+		return 2;
 	if (firmware) {
 		if (artbook)
 			*artbook = 1;
-		return 4;
+		return 3;
 	}
 	return 0;
 }

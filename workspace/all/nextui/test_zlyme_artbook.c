@@ -37,11 +37,10 @@ int main(void)
 	expect(zlyme_artbook_recent(out, 8, "/art") == 0, "recent short");
 	{
 		int art = 9;
-		expect(zlyme_recent_bg_choice(1, 1, 1, 1, &art) == 1 && art == 0, "legacy wins");
-		expect(zlyme_recent_bg_choice(0, 1, 1, 1, &art) == 2 && art == 0, "user wins");
-		expect(zlyme_recent_bg_choice(0, 0, 1, 1, &art) == 3 && art == 0, "global wins");
-		expect(zlyme_recent_bg_choice(0, 0, 0, 1, &art) == 4 && art == 1, "firmware");
-		expect(zlyme_recent_bg_choice(0, 0, 0, 0, &art) == 0 && art == 0, "absent folder");
+		expect(zlyme_recent_bg_choice(1, 1, 1, &art) == 1 && art == 0, "user wins");
+		expect(zlyme_recent_bg_choice(0, 1, 1, &art) == 2 && art == 0, "global wins");
+		expect(zlyme_recent_bg_choice(0, 0, 1, &art) == 3 && art == 1, "firmware");
+		expect(zlyme_recent_bg_choice(0, 0, 0, &art) == 0 && art == 0, "absent folder");
 	}
 	expect(strstr(out, "list") == NULL, "no list path");
 

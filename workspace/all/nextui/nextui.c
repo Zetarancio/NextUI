@@ -436,34 +436,30 @@ static const char *zlyme_artbook_root(void)
 #define ZLYME_ART_SAFE_X 320
 static int zlyme_art_reserve = 0;
 
-/* Legacy folder picture, then a user file, then the card background,
- * then the firmware picture. The directory itself can be absent.
+/* User override, then the card background, then the firmware picture.
+ * The Recently Played directory itself can be absent.
  */
 static int zlyme_recent_background(char *out, size_t n, int *artbook)
 {
-	char legacy[MAX_PATH];
 	char user[MAX_PATH];
 	char global[MAX_PATH];
 	char firmware[MAX_PATH];
 	int choice;
 
-	snprintf(legacy, sizeof(legacy), "%s/.media/bg.png", FAUX_RECENT_PATH);
 	if (!zlyme_recent_user_path(user, sizeof(user), SHARED_USERDATA_PATH))
 		user[0] = '\0';
 	snprintf(global, sizeof(global), "%s", SDCARD_PATH "/bg.png");
 	if (!zlyme_artbook_recent(firmware, sizeof(firmware), zlyme_artbook_root()))
 		firmware[0] = '\0';
 	choice = zlyme_recent_bg_choice(
-		exists(legacy),
 		user[0] && exists(user),
 		exists(global),
 		firmware[0] && exists(firmware),
 		artbook);
 	switch (choice) {
-	case 1: snprintf(out, n, "%s", legacy); return 1;
-	case 2: snprintf(out, n, "%s", user); return 1;
-	case 3: snprintf(out, n, "%s", global); return 1;
-	case 4: snprintf(out, n, "%s", firmware); return 1;
+	case 1: snprintf(out, n, "%s", user); return 1;
+	case 2: snprintf(out, n, "%s", global); return 1;
+	case 3: snprintf(out, n, "%s", firmware); return 1;
 	default:
 		out[0] = '\0';
 		return 0;
