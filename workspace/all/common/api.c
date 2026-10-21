@@ -2407,14 +2407,15 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 		// no need to handle in PLAT_updateNetworkStatus,
 		// this one is async anyway
 		int route = GFX_zlymeRoute();
-		/* A colon in sysfs is a radio link. A2DP uses the same
-		 * Bluetooth glyph. HDMI uses the separate audio glyph. */
-		int show_bt = BT_isConnected() || route == 'b';
+		/* Lit Bluetooth is the A2DP sink. The dim glyph is a radio
+		 * link that is not playing. HDMI uses the audio glyph. */
+		int show_bt_audio = route == 'b';
+		int show_bt_radio = !show_bt_audio && BT_isConnected();
 		int show_hdmi_audio = route == 'h';
 		bool show_clock = CFG_getShowClock();
 		SDL_Rect battery_rect = asset_rects[ASSET_BATTERY];
 
-		if (!show_bt && !show_wifi && !show_clock)
+		if (!show_bt_audio && !show_bt_radio && !show_hdmi_audio && !show_wifi && !show_clock)
 		{
 			ow = SCALE1(PILL_SIZE);
 			ox = dst->w - SCALE1(PADDING) - ow;
@@ -2431,9 +2432,9 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 		{
 			ow = SCALE1(BUTTON_MARGIN);
 
-			if (show_bt)
+			if (show_bt_audio || show_bt_radio)
 			{
-				SDL_Rect bt_rect = asset_rects[ASSET_BLUETOOTH];
+				SDL_Rect bt_rect = asset_rects[show_bt_audio ? ASSET_BLUETOOTH : ASSET_BLUETOOTH_OFF];
 				ow += bt_rect.w + SCALE1(BUTTON_MARGIN);
 			}
 
@@ -2474,9 +2475,9 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 
 			ox += SCALE1(BUTTON_MARGIN);
 
-			if (show_bt)
+			if (show_bt_audio || show_bt_radio)
 			{
-				int asset = ASSET_BLUETOOTH;
+				int asset = show_bt_audio ? ASSET_BLUETOOTH : ASSET_BLUETOOTH_OFF;
 				SDL_Rect bt_rect = asset_rects[asset];
 				int x = ox;
 				int y = oy + (SCALE1(PILL_SIZE) - bt_rect.h) / 2;
