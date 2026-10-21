@@ -30,6 +30,19 @@ int main(void)
 	expect(zlyme_artbook_tool(out, sizeof(out), "/art", "Files/Settings") == 0, "tool slash");
 	expect(zlyme_artbook_system(out, sizeof(out), "/art", "") == 0, "empty");
 	expect(zlyme_artbook_system(out, 8, "/art", "GB") == 0, "short");
+	expect(zlyme_artbook_recent(out, sizeof(out), "/usr/share/nextui/artbook") == 1, "recent");
+	expect(strcmp(out, "/usr/share/nextui/artbook/special/recent.png") == 0, out);
+	expect(zlyme_recent_user_path(out, sizeof(out), "/storage/.config/nextui/shared") == 1, "user");
+	expect(strcmp(out, "/storage/.config/nextui/shared/artbook/special/recent.png") == 0, out);
+	expect(zlyme_artbook_recent(out, 8, "/art") == 0, "recent short");
+	{
+		int art = 9;
+		expect(zlyme_recent_bg_choice(1, 1, 1, 1, &art) == 1 && art == 0, "legacy wins");
+		expect(zlyme_recent_bg_choice(0, 1, 1, 1, &art) == 2 && art == 0, "user wins");
+		expect(zlyme_recent_bg_choice(0, 0, 1, 1, &art) == 3 && art == 0, "global wins");
+		expect(zlyme_recent_bg_choice(0, 0, 0, 1, &art) == 4 && art == 1, "firmware");
+		expect(zlyme_recent_bg_choice(0, 0, 0, 0, &art) == 0 && art == 0, "absent folder");
+	}
 	expect(strstr(out, "list") == NULL, "no list path");
 
 	/* Request 1 is in flight. Navigation bumps the request to 2 and

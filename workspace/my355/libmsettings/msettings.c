@@ -435,10 +435,12 @@ int GetHDMI(void)
 
 void SetHDMI(int value)
 {
+	/* GFX_init calls this with the live connector state. Playback
+	 * gain belongs to zlyme-audio, including when HDMI is unplugged.
+	 */
+	if (!settings)
+		return;
 	settings->hdmi = value;
-	/* The display switch must not rewrite the playback gain. */
-	if (!value)
-		SetVolume(GetVolume());
 }
 
 int GetMute(void)

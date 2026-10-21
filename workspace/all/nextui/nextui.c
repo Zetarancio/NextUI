@@ -436,6 +436,40 @@ static const char *zlyme_artbook_root(void)
 #define ZLYME_ART_SAFE_X 320
 static int zlyme_art_reserve = 0;
 
+/* Legacy folder picture, then a user file, then the card background,
+ * then the firmware picture. The directory itself can be absent.
+ */
+static int zlyme_recent_background(char *out, size_t n, int *artbook)
+{
+	char legacy[MAX_PATH];
+	char user[MAX_PATH];
+	char global[MAX_PATH];
+	char firmware[MAX_PATH];
+	int choice;
+
+	snprintf(legacy, sizeof(legacy), "%s/.media/bg.png", FAUX_RECENT_PATH);
+	if (!zlyme_recent_user_path(user, sizeof(user), SHARED_USERDATA_PATH))
+		user[0] = '\0';
+	snprintf(global, sizeof(global), "%s", SDCARD_PATH "/bg.png");
+	if (!zlyme_artbook_recent(firmware, sizeof(firmware), zlyme_artbook_root()))
+		firmware[0] = '\0';
+	choice = zlyme_recent_bg_choice(
+		exists(legacy),
+		user[0] && exists(user),
+		exists(global),
+		firmware[0] && exists(firmware),
+		artbook);
+	switch (choice) {
+	case 1: snprintf(out, n, "%s", legacy); return 1;
+	case 2: snprintf(out, n, "%s", user); return 1;
+	case 3: snprintf(out, n, "%s", global); return 1;
+	case 4: snprintf(out, n, "%s", firmware); return 1;
+	default:
+		out[0] = '\0';
+		return 0;
+	}
+}
+
 static int zlyme_system_artbook(char *out, size_t n, const char *folder)
 {
 	char emu[MAX_PATH];
@@ -3165,6 +3199,7 @@ int main (int argc, char *argv[]) {
 	int was_online = PWR_isOnline();
     int had_bt = PLAT_btIsConnected();
 	int had_sink = GetAudioSink();
+	int had_route = GFX_zlymeRoute();
 
 	int selected_row = top->selected - top->start;
 	float targetY;
@@ -3226,6 +3261,11 @@ int main (int argc, char *argv[]) {
 		if (had_sink != has_sink)
 			dirty = 1;
 		had_sink = has_sink;
+
+		int has_route = GFX_zlymeRoute();
+		if (had_route != has_route)
+			dirty = 1;
+		had_route = has_route;
 
 		int gsanimdir = ANIM_NONE;
 
@@ -4019,7 +4059,12 @@ int main (int argc, char *argv[]) {
 							snprintf(tmppath, sizeof(tmppath), "%s/.media/bglist.png", folderBgPath);
 						else
 							snprintf(tmppath, sizeof(tmppath), "%s/.media/bg.png", folderBgPath);
-						if(!exists(tmppath)) {
+						if (entry->type == ENTRY_DIR && (exactMatch(newBg, FAUX_RECENT_PATH) || suffixMatch("/Recently Played", newBg))) {
+							if (!zlyme_recent_background(tmppath, sizeof(tmppath), &artbook))
+								tmppath[0] = '\0';
+							else if (artbook || !suffixMatch("/.media/bg.png", tmppath))
+								list_show_entry_names = true;
+						} else if(!exists(tmppath)) {
 							list_show_entry_names = true;
 							tmppath[0] = '\0';
 							if (exists(defaultBgPath))

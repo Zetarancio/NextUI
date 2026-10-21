@@ -11,6 +11,14 @@ int zlyme_artbook_system(char *out, size_t out_len, const char *root, const char
 int zlyme_artbook_tool(char *out, size_t out_len, const char *root, const char *pak);
 /* The Tools root category. Individual Tool paks use zlyme_artbook_tool. */
 int zlyme_artbook_tools_category(char *out, size_t out_len, const char *root);
+/* Firmware Recently Played picture. The folder on the card can be absent. */
+int zlyme_artbook_recent(char *out, size_t out_len, const char *root);
+/* Optional picture under the NextUI shared config directory. */
+int zlyme_recent_user_path(char *out, size_t out_len, const char *shared);
+/* 1 legacy folder picture, 2 user override, 3 card background, 4 firmware.
+ * *artbook is 1 only for the firmware file. 0 when none of them exist.
+ */
+int zlyme_recent_bg_choice(int legacy, int user, int global, int firmware, int *artbook);
 
 /* 1 when task_gen is the newest background request. 0 is never current,
  * so a cleared request cannot be restored by an older load.

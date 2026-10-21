@@ -425,6 +425,8 @@ typedef enum {
  * @return The width of the rendered indicator
  */
 int GFX_blitHardwareIndicator(SDL_Surface* dst, int x, int y, IndicatorType indicator_type);
+/* 0 speaker, 'b' A2DP, 'h' HDMI. One read of the route file per half second. */
+int GFX_zlymeRoute(void);
 
 /**
  * Create a surface with the same pixel format as gfx.screen.

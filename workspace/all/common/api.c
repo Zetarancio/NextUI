@@ -2304,7 +2304,9 @@ int GFX_blitHardwareIndicator(SDL_Surface *dst, int x, int y, IndicatorType indi
 		setting_value = GetVolume();
 		setting_min = VOLUME_MIN;
 		setting_max = VOLUME_MAX;
-		if(GetAudioSink() == AUDIO_SINK_BLUETOOTH)
+		/* The pill follows the route that is playing. HDMI keeps the
+		 * speaker glyph. A saved Bluetooth preference does not. */
+		if(GFX_zlymeRoute() == 'b')
 			asset = (setting_value > 0 ? ASSET_BLUETOOTH : ASSET_BLUETOOTH_OFF);
 		else
 			asset = (setting_value > 0 ? ASSET_VOLUME : ASSET_VOLUME_MUTE);
@@ -2356,7 +2358,8 @@ SDL_Surface* GFX_createScreenFormatSurface(int width, int height)
 	);
 }
 
-static int zlyme_route_is_external(void)
+/* 0 codec or unknown, 'b' A2DP, 'h' HDMI. One read per half second. */
+int GFX_zlymeRoute(void)
 {
 	static unsigned long last_ms;
 	static int cached;
@@ -2376,8 +2379,10 @@ static int zlyme_route_is_external(void)
 		return 0;
 	}
 	fclose(f);
-	cached = strcmp(role, "bt\n") == 0 || strcmp(role, "bt") == 0
-		|| strcmp(role, "hdmi\n") == 0 || strcmp(role, "hdmi") == 0;
+	if (strcmp(role, "bt\n") == 0 || strcmp(role, "bt") == 0)
+		cached = 'b';
+	else if (strcmp(role, "hdmi\n") == 0 || strcmp(role, "hdmi") == 0)
+		cached = 'h';
 	return cached;
 }
 
@@ -2401,10 +2406,11 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 		int show_wifi = strength > SIGNAL_STRENGTH_OFF;
 		// no need to handle in PLAT_updateNetworkStatus,
 		// this one is async anyway
-		int show_bt = BT_isConnected();
-		/* The mark follows the route that is actually playing.
-		 * An explicit preference with no such node stays off. */
-		int show_external_audio = zlyme_route_is_external();
+		int route = GFX_zlymeRoute();
+		/* A colon in sysfs is a radio link. A2DP uses the same
+		 * Bluetooth glyph. HDMI uses the separate audio glyph. */
+		int show_bt = BT_isConnected() || route == 'b';
+		int show_hdmi_audio = route == 'h';
 		bool show_clock = CFG_getShowClock();
 		SDL_Rect battery_rect = asset_rects[ASSET_BATTERY];
 
@@ -2437,7 +2443,7 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 				ow += wifi_rect.w + SCALE1(BUTTON_MARGIN);
 			}
 
-			if (show_external_audio)
+			if (show_hdmi_audio)
 			{
 				SDL_Rect external_audio_rect = asset_rects[ASSET_AUDIO];
 				ow += external_audio_rect.w + SCALE1(BUTTON_MARGIN);
@@ -2493,7 +2499,7 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 				ox += wifi_rect.w + SCALE1(BUTTON_MARGIN);
 			}
 
-			if (show_external_audio)
+			if (show_hdmi_audio)
 			{
 				int asset = ASSET_AUDIO;
 				SDL_Rect external_audio_rect = asset_rects[asset];
