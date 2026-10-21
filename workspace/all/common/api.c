@@ -2304,10 +2304,10 @@ int GFX_blitHardwareIndicator(SDL_Surface *dst, int x, int y, IndicatorType indi
 		setting_value = GetVolume();
 		setting_min = VOLUME_MIN;
 		setting_max = VOLUME_MAX;
-		/* The pill follows the route that is playing. HDMI keeps the
-		 * speaker glyph. A saved Bluetooth preference does not. */
+		/* The pill follows the route that is playing. The headset
+		 * glyph is (66,104). HDMI keeps the speaker glyph. */
 		if(GFX_zlymeRoute() == 'b')
-			asset = (setting_value > 0 ? ASSET_BLUETOOTH : ASSET_BLUETOOTH_OFF);
+			asset = (setting_value > 0 ? ASSET_BLUETOOTH_OFF : ASSET_VOLUME_MUTE);
 		else
 			asset = (setting_value > 0 ? ASSET_VOLUME : ASSET_VOLUME_MUTE);
 		readonly = GetMute() && GetMutedVolume() != SETTINGS_DEFAULT_MUTE_NO_CHANGE;
@@ -2407,8 +2407,8 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 		// no need to handle in PLAT_updateNetworkStatus,
 		// this one is async anyway
 		int route = GFX_zlymeRoute();
-		/* Lit Bluetooth is the A2DP sink. The dim glyph is a radio
-		 * link that is not playing. HDMI uses the audio glyph. */
+		/* (66,104) is the headset. (53,104) is the radio rune.
+		 * HDMI uses the audio glyph. A radio link is not A2DP. */
 		int show_bt_audio = route == 'b';
 		int show_bt_radio = !show_bt_audio && BT_isConnected();
 		int show_hdmi_audio = route == 'h';
@@ -2434,7 +2434,7 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 
 			if (show_bt_audio || show_bt_radio)
 			{
-				SDL_Rect bt_rect = asset_rects[show_bt_audio ? ASSET_BLUETOOTH : ASSET_BLUETOOTH_OFF];
+				SDL_Rect bt_rect = asset_rects[show_bt_audio ? ASSET_BLUETOOTH_OFF : ASSET_BLUETOOTH];
 				ow += bt_rect.w + SCALE1(BUTTON_MARGIN);
 			}
 
@@ -2477,7 +2477,7 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 
 			if (show_bt_audio || show_bt_radio)
 			{
-				int asset = show_bt_audio ? ASSET_BLUETOOTH : ASSET_BLUETOOTH_OFF;
+				int asset = show_bt_audio ? ASSET_BLUETOOTH_OFF : ASSET_BLUETOOTH;
 				SDL_Rect bt_rect = asset_rects[asset];
 				int x = ox;
 				int y = oy + (SCALE1(PILL_SIZE) - bt_rect.h) / 2;
