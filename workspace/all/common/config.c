@@ -101,6 +101,7 @@ void CFG_defaults(NextUISettings *cfg)
         .raServerUsername = CFG_DEFAULT_RA_SERVER_USERNAME,
         .raAuthenticated = CFG_DEFAULT_RA_AUTHENTICATED,
         .raShowNotifications = CFG_DEFAULT_RA_SHOW_NOTIFICATIONS,
+        .raShowChallengeIndicators = CFG_DEFAULT_RA_SHOW_CHALLENGE_INDICATORS,
         .raNotificationDuration = CFG_DEFAULT_RA_NOTIFICATION_DURATION,
         .raProgressNotificationDuration = CFG_DEFAULT_RA_PROGRESS_NOTIFICATION_DURATION,
         .raAchievementSortOrder = CFG_DEFAULT_RA_ACHIEVEMENT_SORT_ORDER,
@@ -488,6 +489,11 @@ void CFG_init(FontLoad_callback_t cb, ColorSet_callback_t ccb)
             if (sscanf(line, "raShowNotifications=%i", &temp_value) == 1)
             {
                 CFG_setRAShowNotifications((bool)temp_value);
+                continue;
+            }
+            if (sscanf(line, "raShowChallengeIndicators=%i", &temp_value) == 1)
+            {
+                CFG_setRAShowChallengeIndicators((bool)temp_value);
                 continue;
             }
             if (sscanf(line, "raNotificationDuration=%i", &temp_value) == 1)
@@ -1273,6 +1279,17 @@ void CFG_setRAShowNotifications(bool show)
     CFG_sync();
 }
 
+bool CFG_getRAShowChallengeIndicators(void)
+{
+    return settings.raShowChallengeIndicators;
+}
+
+void CFG_setRAShowChallengeIndicators(bool show)
+{
+    settings.raShowChallengeIndicators = show;
+    CFG_sync();
+}
+
 int CFG_getRANotificationDuration(void)
 {
     return settings.raNotificationDuration;
@@ -1568,6 +1585,10 @@ void CFG_get(const char *key, char *value)
     {
         sprintf(value, "%i", (int)(CFG_getRAShowNotifications()));
     }
+    else if (strcmp(key, "raShowChallengeIndicators") == 0)
+    {
+        sprintf(value, "%i", (int)(CFG_getRAShowChallengeIndicators()));
+    }
     else if (strcmp(key, "raNotificationDuration") == 0)
     {
         sprintf(value, "%i", CFG_getRANotificationDuration());
@@ -1684,6 +1705,7 @@ void CFG_sync(void)
     fprintf(file, "raServerUsername=%s\n", settings.raServerUsername);
     fprintf(file, "raAuthenticated=%i\n", settings.raAuthenticated);
     fprintf(file, "raShowNotifications=%i\n", settings.raShowNotifications);
+    fprintf(file, "raShowChallengeIndicators=%i\n", settings.raShowChallengeIndicators);
     fprintf(file, "raNotificationDuration=%i\n", settings.raNotificationDuration);
     fprintf(file, "raProgressNotificationDuration=%i\n", settings.raProgressNotificationDuration);
     fprintf(file, "raAchievementSortOrder=%i\n", settings.raAchievementSortOrder);
@@ -1759,6 +1781,7 @@ void CFG_print(void)
     printf("\t\"raServerUsername\": \"%s\",\n", settings.raServerUsername);
     printf("\t\"raAuthenticated\": %i,\n", settings.raAuthenticated);
     printf("\t\"raShowNotifications\": %i,\n", settings.raShowNotifications);
+    printf("\t\"raShowChallengeIndicators\": %i,\n", settings.raShowChallengeIndicators);
     printf("\t\"raNotificationDuration\": %i,\n", settings.raNotificationDuration);
     printf("\t\"raProgressNotificationDuration\": %i,\n", settings.raProgressNotificationDuration);
     printf("\t\"raAchievementSortOrder\": %i,\n", settings.raAchievementSortOrder);
