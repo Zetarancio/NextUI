@@ -20,6 +20,7 @@
 #include <linux/input.h>
 #include <xf86drm.h>
 #include <time.h>
+#include <xf86drmMode.h>
 
 #include "msettings.h"
 
