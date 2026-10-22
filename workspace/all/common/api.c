@@ -2304,10 +2304,11 @@ int GFX_blitHardwareIndicator(SDL_Surface *dst, int x, int y, IndicatorType indi
 		setting_value = GetVolume();
 		setting_min = VOLUME_MIN;
 		setting_max = VOLUME_MAX;
-		/* The pill follows the route that is playing. The headset
-		 * glyph is (66,104). HDMI keeps the speaker glyph. */
-		if(GFX_zlymeRoute() == 'b')
-			asset = (setting_value > 0 ? ASSET_BLUETOOTH_OFF : ASSET_VOLUME_MUTE);
+		/* Upstream: a Bluetooth sink uses the rune while audible and
+		 * the headset glyph at zero. Every other sink uses the
+		 * speaker and mute glyphs. */
+		if(GetAudioSink() == AUDIO_SINK_BLUETOOTH)
+			asset = (setting_value > 0 ? ASSET_BLUETOOTH : ASSET_BLUETOOTH_OFF);
 		else
 			asset = (setting_value > 0 ? ASSET_VOLUME : ASSET_VOLUME_MUTE);
 		readonly = GetMute() && GetMutedVolume() != SETTINGS_DEFAULT_MUTE_NO_CHANGE;
@@ -2358,34 +2359,6 @@ SDL_Surface* GFX_createScreenFormatSurface(int width, int height)
 	);
 }
 
-/* 0 codec or unknown, 'b' A2DP, 'h' HDMI. One read per half second. */
-int GFX_zlymeRoute(void)
-{
-	static unsigned long last_ms;
-	static int cached;
-	FILE *f;
-	char role[16];
-	unsigned long now = SDL_GetTicks();
-
-	if (last_ms && now - last_ms < 500)
-		return cached;
-	last_ms = now;
-	cached = 0;
-	f = fopen("/run/zlyme/pipewire/active", "r");
-	if (!f)
-		return 0;
-	if (!fgets(role, sizeof(role), f)) {
-		fclose(f);
-		return 0;
-	}
-	fclose(f);
-	if (strcmp(role, "bt\n") == 0 || strcmp(role, "bt") == 0)
-		cached = 'b';
-	else if (strcmp(role, "hdmi\n") == 0 || strcmp(role, "hdmi") == 0)
-		cached = 'h';
-	return cached;
-}
-
 int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 {
 	int ox;
@@ -2406,16 +2379,16 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 		int show_wifi = strength > SIGNAL_STRENGTH_OFF;
 		// no need to handle in PLAT_updateNetworkStatus,
 		// this one is async anyway
-		int route = GFX_zlymeRoute();
-		/* (66,104) is the headset. (53,104) is the radio rune.
-		 * HDMI uses the audio glyph. A radio link is not A2DP. */
-		int show_bt_audio = route == 'b';
-		int show_bt_radio = !show_bt_audio && BT_isConnected();
-		int show_hdmi_audio = route == 'h';
+		/* A radio link and the playing sink are different facts.
+		 * The rune is the link. The audio glyph is any non-default
+		 * sink, including HDMI and A2DP. Upstream hides that glyph
+		 * when it is the only extra mark. Keep it visible. */
+		int show_bt = BT_isConnected();
+		int show_external_audio = GetAudioSink() != AUDIO_SINK_DEFAULT;
 		bool show_clock = CFG_getShowClock();
 		SDL_Rect battery_rect = asset_rects[ASSET_BATTERY];
 
-		if (!show_bt_audio && !show_bt_radio && !show_hdmi_audio && !show_wifi && !show_clock)
+		if (!show_bt && !show_external_audio && !show_wifi && !show_clock)
 		{
 			ow = SCALE1(PILL_SIZE);
 			ox = dst->w - SCALE1(PADDING) - ow;
@@ -2432,9 +2405,9 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 		{
 			ow = SCALE1(BUTTON_MARGIN);
 
-			if (show_bt_audio || show_bt_radio)
+			if (show_bt)
 			{
-				SDL_Rect bt_rect = asset_rects[show_bt_audio ? ASSET_BLUETOOTH_OFF : ASSET_BLUETOOTH];
+				SDL_Rect bt_rect = asset_rects[ASSET_BLUETOOTH];
 				ow += bt_rect.w + SCALE1(BUTTON_MARGIN);
 			}
 
@@ -2444,7 +2417,7 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 				ow += wifi_rect.w + SCALE1(BUTTON_MARGIN);
 			}
 
-			if (show_hdmi_audio)
+			if (show_external_audio)
 			{
 				SDL_Rect external_audio_rect = asset_rects[ASSET_AUDIO];
 				ow += external_audio_rect.w + SCALE1(BUTTON_MARGIN);
@@ -2475,9 +2448,9 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 
 			ox += SCALE1(BUTTON_MARGIN);
 
-			if (show_bt_audio || show_bt_radio)
+			if (show_bt)
 			{
-				int asset = show_bt_audio ? ASSET_BLUETOOTH_OFF : ASSET_BLUETOOTH;
+				int asset = ASSET_BLUETOOTH;
 				SDL_Rect bt_rect = asset_rects[asset];
 				int x = ox;
 				int y = oy + (SCALE1(PILL_SIZE) - bt_rect.h) / 2;
@@ -2500,7 +2473,7 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 				ox += wifi_rect.w + SCALE1(BUTTON_MARGIN);
 			}
 
-			if (show_hdmi_audio)
+			if (show_external_audio)
 			{
 				int asset = ASSET_AUDIO;
 				SDL_Rect external_audio_rect = asset_rects[asset];

@@ -40,10 +40,10 @@ void SetVolume(int value); // 0-20
 int GetJack(void);
 void SetJack(int value); // 0-1
 
-#define AUDIO_SINK_DEFAULT 0 // auto: A2DP, then HDMI with audio, then the codec
-#define AUDIO_SINK_BLUETOOTH 1 // explicit Bluetooth audio
-#define AUDIO_SINK_USBDAC 2 // unused on my355
-#define AUDIO_SINK_HDMI 3 // explicit HDMI audio
+#define AUDIO_SINK_DEFAULT 0 /* codec or no published route */
+#define AUDIO_SINK_BLUETOOTH 1 /* effective default is an A2DP sink */
+#define AUDIO_SINK_USBDAC 2 /* unused on my355 */
+#define AUDIO_SINK_HDMI 3 /* effective default is HDMI */
 int GetAudioSink(void);
 void SetAudioSink(int value);
 

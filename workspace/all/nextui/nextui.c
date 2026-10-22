@@ -3195,7 +3195,6 @@ int main (int argc, char *argv[]) {
 	int was_online = PWR_isOnline();
     int had_bt = PLAT_btIsConnected();
 	int had_sink = GetAudioSink();
-	int had_route = GFX_zlymeRoute();
 
 	int selected_row = top->selected - top->start;
 	float targetY;
@@ -3257,11 +3256,6 @@ int main (int argc, char *argv[]) {
 		if (had_sink != has_sink)
 			dirty = 1;
 		had_sink = has_sink;
-
-		int has_route = GFX_zlymeRoute();
-		if (had_route != has_route)
-			dirty = 1;
-		had_route = has_route;
 
 		int gsanimdir = ANIM_NONE;
 

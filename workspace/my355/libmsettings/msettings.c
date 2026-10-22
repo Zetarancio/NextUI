@@ -19,7 +19,7 @@
 #include <stdint.h>
 #include <linux/input.h>
 #include <xf86drm.h>
-#include <xf86drmMode.h>
+#include <time.h>
 
 #include "msettings.h"
 
@@ -508,7 +508,35 @@ void SetExposure(int value) { (void)value; }
 
 int GetAudioSink(void)
 {
-	return settings ? settings->audiosink : 0;
+	const char *path = getenv("ZLYME_ROUTE_FILE");
+	FILE *file;
+	char role[16];
+	int sink = AUDIO_SINK_DEFAULT;
+	static struct timespec last;
+	static int cached = -1;
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	if (cached >= 0 && now.tv_sec == last.tv_sec &&
+	    now.tv_nsec - last.tv_nsec < 500000000L)
+		return cached;
+	last = now;
+	if (!path || !path[0])
+		path = "/run/zlyme/pipewire/active";
+	file = fopen(path, "r");
+	if (!file) {
+		cached = AUDIO_SINK_DEFAULT;
+		return cached;
+	}
+	if (fgets(role, sizeof(role), file)) {
+		if (strcmp(role, "bt\n") == 0 || strcmp(role, "bt") == 0)
+			sink = AUDIO_SINK_BLUETOOTH;
+		else if (strcmp(role, "hdmi\n") == 0 || strcmp(role, "hdmi") == 0)
+			sink = AUDIO_SINK_HDMI;
+	}
+	fclose(file);
+	cached = sink;
+	return cached;
 }
 
 void SetAudioSink(int value)
