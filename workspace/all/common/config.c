@@ -1499,7 +1499,7 @@ void CFG_get(const char *key, char *value)
     }
     else if (strcmp(key, "artWidth") == 0)
     {
-        sprintf(value, "%i", (int)(CFG_getGameArtWidth()) * 100);
+        sprintf(value, "%i", zlyme_game_art_percent(CFG_getGameArtWidth()));
     }
     else if (strcmp(key, "wifi") == 0)
     {

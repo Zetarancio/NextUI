@@ -18,6 +18,7 @@
 #include "launch_queue.h"
 #include "zlyme_thumbpath.h"
 #include "zlyme_artbook.h"
+#include "list_width.h"
 #include <sys/resource.h>
 #include <pthread.h>
 #include <sys/wait.h>
@@ -4168,18 +4169,45 @@ int main (int argc, char *argv[]) {
 					previousY = previous_row * PILL_SIZE;
 					targetY = selected_row * PILL_SIZE;
 					SDL_Color text_color = uintToColour(THEME_COLOR4_255); // list text color
+					int row_left = SCALE1(BUTTON_MARGIN);
+					int clear_right = screen->w - SCALE1(PADDING * 2);
+					int row_gap = SCALE1(BUTTON_MARGIN);
+					int hint_left = ow > 0 ? screen->w - SCALE1(PADDING) - ow : 0;
+					int hint_top = SCALE1(PADDING);
+					int hint_bottom = hint_top + SCALE1(PILL_SIZE);
+					int thumb_left = 0, thumb_top = 0, thumb_bottom = 0;
+					if (had_thumb) {
+						int iw = 0, ih = 0, tw = 0, th = 0;
+						SDL_LockMutex(thumbMutex);
+						if (thumbbmp) {
+							iw = thumbbmp->w;
+							ih = thumbbmp->h;
+						}
+						SDL_UnlockMutex(thumbMutex);
+						zlyme_rom_thumb_box(screen->w, screen->h, CFG_getGameArtWidth(),
+							iw, ih, SCALE1(BUTTON_MARGIN * 3),
+							&thumb_left, &thumb_top, &tw, &th);
+						thumb_bottom = thumb_top + th;
+					}
+					int art_left = zlyme_art_reserve > 0 ? zlyme_art_reserve : 0;
 					for (int i = top->start, j = 0; i < top->end; i++, j++) {
 						Entry* entry = top->entries->items[i];
 						char* entry_name = entry->name;
 						char* entry_unique = entry->unique;
-						int available_width = MAX(0,(had_thumb ? ox + SCALE1(BUTTON_MARGIN) : screen->w - SCALE1(BUTTON_MARGIN)) - SCALE1(PADDING * 2));
-						if (zlyme_art_reserve > 0)
-							available_width = MIN(available_width, MAX(0, zlyme_art_reserve - SCALE1(PADDING)));
+						int row_top = SCALE1(PADDING) + j * SCALE1(PILL_SIZE);
+						int row_bottom = row_top + SCALE1(PILL_SIZE);
+						int edges[3];
+						int nedges = 0;
+						int available_width;
+						if (hint_left > 0 && zlyme_ranges_overlap(row_top, row_bottom, hint_top, hint_bottom))
+							edges[nedges++] = hint_left;
+						if (had_thumb && zlyme_ranges_overlap(row_top, row_bottom, thumb_top, thumb_bottom))
+							edges[nedges++] = thumb_left;
+						if (art_left > 0)
+							edges[nedges++] = art_left;
+						available_width = zlyme_list_row_width(row_left, clear_right, row_gap, edges, nedges);
 						bool row_is_selected = (j == selected_row);
-						bool row_is_top = (i == top->start);
 						bool row_has_moved = (previous_row != selected_row || previous_depth != stack->count);
-						if (row_is_top && !(had_thumb))
-							available_width -= ow;
 
 						trimSortingMeta(&entry_name);
 						if (entry_unique) // Only render if a unique name exists
@@ -4187,7 +4215,11 @@ int main (int argc, char *argv[]) {
 
 						char display_name[256];
 						int text_width = GFX_getTextWidth(font.large, entry_unique ? entry_unique : entry_name, display_name, available_width, SCALE1(BUTTON_PADDING * 2));
-						int max_width = MIN(available_width, text_width);
+						int pill_w = 0;
+						int scroll_w = 0;
+						int max_width;
+						zlyme_pill_scroll(available_width, text_width, SCALE1(BUTTON_PADDING * 2), &pill_w, &scroll_w);
+						max_width = pill_w;
 
 						// This spaghetti is preventing white text on white pill when volume/color temp is shown,
 						// dont ask me why. This all needs to get tossed out and redone properly later.
@@ -4205,7 +4237,7 @@ int main (int argc, char *argv[]) {
 						// TODO: Use actual font metrics to center, this only works in simple cases
 						const int text_offset_y = (SCALE1(PILL_SIZE) - text->h + 1) >> 1;
 						if (row_is_selected) {
-							is_scrolling = list_show_entry_names && GFX_textShouldScroll(font.large,display_name, max_width - SCALE1(BUTTON_PADDING*2), fontMutex);
+							is_scrolling = list_show_entry_names && scroll_w > 0 && GFX_textShouldScroll(font.large,display_name, scroll_w, fontMutex);
 							GFX_resetScrollText();
 							bool should_animate = previous_depth == stack->count;
 							SDL_LockMutex(animMutex);
@@ -4231,10 +4263,10 @@ int main (int argc, char *argv[]) {
 							task->entry_name = strdup(notext ? " " : entry_name);
 							animPill(task);
 						}
-						SDL_Rect text_rect = { 0, 0, max_width - SCALE1(BUTTON_PADDING*2), text->h };
+						SDL_Rect text_rect = { 0, 0, scroll_w, text->h };
 						SDL_Rect dest_rect = { SCALE1(BUTTON_MARGIN + BUTTON_PADDING), SCALE1(PADDING + (j * PILL_SIZE)) + text_offset_y };
 
-						if(list_show_entry_names) {
+						if(list_show_entry_names && scroll_w > 0) {
 							SDL_BlitSurface(text_unique, &text_rect, screen, &dest_rect);
 							SDL_BlitSurface(text, &text_rect, screen, &dest_rect);
 						}
@@ -4321,24 +4353,13 @@ int main (int argc, char *argv[]) {
 				SDL_UnlockMutex(bgMutex);
 				SDL_LockMutex(thumbMutex);
 				if(thumbbmp && thumbchanged) {
-					int img_w = thumbbmp->w;
-					int img_h = thumbbmp->h;
-					double aspect_ratio = (double)img_h / img_w;
-					int max_w = (int)(screen->w * CFG_getGameArtWidth());
-					int max_h = (int)(screen->h * 0.6);
-					int new_w = max_w;
-					int new_h = (int)(new_w * aspect_ratio);
-
-					if (new_h > max_h) {
-						new_h = max_h;
-						new_w = (int)(new_h / aspect_ratio);
-					}
-
-					int target_x = screen->w-(new_w + SCALE1(BUTTON_MARGIN*3));
-					int target_y = (int)(screen->h * 0.50);
-					int center_y = target_y - (new_h / 2); // FIX: use new_h instead of thumbbmp->h
+					int target_x, center_y, new_w, new_h;
+					zlyme_rom_thumb_box(screen->w, screen->h, CFG_getGameArtWidth(),
+						thumbbmp->w, thumbbmp->h, SCALE1(BUTTON_MARGIN * 3),
+						&target_x, &center_y, &new_w, &new_h);
 					GFX_clearLayers(LAYER_THUMBNAIL);
-					GFX_drawOnLayer(thumbbmp,target_x,center_y,new_w,new_h,1.0f,0,LAYER_THUMBNAIL);
+					if (new_w > 0 && new_h > 0)
+						GFX_drawOnLayer(thumbbmp,target_x,center_y,new_w,new_h,1.0f,0,LAYER_THUMBNAIL);
 				} else if(thumbchanged) {
 					GFX_clearLayers(LAYER_THUMBNAIL);
 				}
@@ -4376,7 +4397,6 @@ int main (int argc, char *argv[]) {
 			// honestly this whole thing is here only for the scrolling text, I set it now to run this at 30fps which is enough for scrolling text, should move this to seperate animation function eventually
 			Uint32 now = SDL_GetTicks();
 			Uint32 frame_start = now;
-			static char cached_display_name[256] = "";
 			SDL_LockMutex(bgMutex);
 			if(folderbgchanged) {
 				zlyme_show_folder_bg(folderbgbmp, screen->w, screen->h);
@@ -4385,26 +4405,13 @@ int main (int argc, char *argv[]) {
 			SDL_UnlockMutex(bgMutex);
 			SDL_LockMutex(thumbMutex);
 			if(thumbbmp && thumbchanged) {
-				int img_w = thumbbmp->w;
-				int img_h = thumbbmp->h;
-				double aspect_ratio = (double)img_h / img_w;
-
-				int max_w = (int)(screen->w * CFG_getGameArtWidth());
-				int max_h = (int)(screen->h * 0.6);
-
-				int new_w = max_w;
-				int new_h = (int)(new_w * aspect_ratio);
-
-				if (new_h > max_h) {
-					new_h = max_h;
-					new_w = (int)(new_h / aspect_ratio);
-				}
-
-				int target_x = screen->w-(new_w + SCALE1(BUTTON_MARGIN*3));
-				int target_y = (int)(screen->h * 0.50);
-				int center_y = target_y - (new_h / 2); // FIX: use new_h instead of thumbbmp->h
+				int target_x, center_y, new_w, new_h;
+				zlyme_rom_thumb_box(screen->w, screen->h, CFG_getGameArtWidth(),
+					thumbbmp->w, thumbbmp->h, SCALE1(BUTTON_MARGIN * 3),
+					&target_x, &center_y, &new_w, &new_h);
 				GFX_clearLayers(LAYER_THUMBNAIL);
-				GFX_drawOnLayer(thumbbmp,target_x,center_y,new_w,new_h,1.0f,0,LAYER_THUMBNAIL);
+				if (new_w > 0 && new_h > 0)
+					GFX_drawOnLayer(thumbbmp,target_x,center_y,new_w,new_h,1.0f,0,LAYER_THUMBNAIL);
 				thumbchanged = 0;
 			} else if(thumbchanged) {
 				GFX_clearLayers(LAYER_THUMBNAIL);
@@ -4421,7 +4428,7 @@ int main (int argc, char *argv[]) {
 			SDL_UnlockMutex(animMutex);
 			if (currentScreen == SCREEN_GAMELIST) {
 				if(is_scrolling && pillanimdone && currentAnimQueueSize < 1) {
-					int ow = GFX_blitHardwareGroup(screen, show_setting);
+					GFX_blitHardwareGroup(screen, show_setting);
 					Entry* entry = top->entries->items[top->selected];
 					/* Display strips 000) prefixes. Do not move the stored
 					   pointer or the next sort loses the ordering key. */
@@ -4433,24 +4440,22 @@ int main (int argc, char *argv[]) {
 						entry_text = unique_text;
 					}
 
-					int available_width = (had_thumb ? ox + SCALE1(BUTTON_MARGIN) : screen->w - SCALE1(BUTTON_MARGIN)) - SCALE1(PADDING * 2);
-					if (zlyme_art_reserve > 0)
-						available_width = MIN(available_width, MAX(0, zlyme_art_reserve - SCALE1(PADDING)));
-					if (top->selected == top->start && !had_thumb) available_width -= ow;
+					/* The scroll texture uses the pill already built for
+					 * this row. Do not measure the row again. */
+					int pill_w = 0;
+					int scroll_w = 0;
+					zlyme_pill_scroll(globallpillW, globallpillW, SCALE1(BUTTON_PADDING * 2), &pill_w, &scroll_w);
 
 					SDL_Color text_color = uintToColour(THEME_COLOR5_255);
-
-					int text_width = GFX_getTextWidth(font.large, entry_text, cached_display_name, available_width, SCALE1(BUTTON_PADDING * 2));
-					int max_width = MIN(available_width, text_width);
 					int text_offset_y = (SCALE1(PILL_SIZE) - TTF_FontHeight(font.large) + 1) >> 1;
 
 					GFX_clearLayers(LAYER_SCROLLTEXT);
-					if (list_show_entry_names) {
+					if (list_show_entry_names && scroll_w > 0) {
 						GFX_scrollTextTexture(
 							font.large,
 							entry_text,
 							SCALE1(BUTTON_MARGIN + BUTTON_PADDING), SCALE1(PADDING + previous_row * PILL_SIZE) + text_offset_y,
-							max_width - SCALE1(BUTTON_PADDING * 2),
+							scroll_w,
 							0,
 							text_color,
 							1,

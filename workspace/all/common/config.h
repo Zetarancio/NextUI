@@ -396,6 +396,16 @@ void CFG_setMuteLEDs(bool);
 // Returns "" for an out of range index.
 const char* CFG_getFnAction(int index);
 void CFG_setFnAction(int index, const char* action);
+/* Settings text for Game art width. The fraction is multiplied before
+ * the cast. (int)(0.45) * 100 is 0. */
+static inline int zlyme_game_art_percent(double width)
+{
+	if (width < 0.0)
+		width = 0.0;
+	else if (width > 1.0)
+		width = 1.0;
+	return (int)(width * 100.0);
+}
 // Set game art width percentage.
 double CFG_getGameArtWidth(void);
 void CFG_setGameArtWidth(double zeroToOne);

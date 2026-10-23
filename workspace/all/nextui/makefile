@@ -21,7 +21,7 @@ SDL?=SDL
 
 TARGET = nextui
 INCDIR = -I. -I../common/ -I../../$(PLATFORM)/platform/
-SOURCE = $(TARGET).c zlyme_thumbpath.c ../common/scaler.c ../common/utils.c ../common/config.c ../common/api.c ../common/palette.c ../../$(PLATFORM)/platform/platform.c
+SOURCE = $(TARGET).c zlyme_thumbpath.c list_width.c ../common/scaler.c ../common/utils.c ../common/config.c ../common/api.c ../common/palette.c ../../$(PLATFORM)/platform/platform.c
 ifeq ($(PLATFORM),my355)
 ifneq ($(ZLYME_HDMI_INC),)
 CFLAGS += -I$(ZLYME_HDMI_INC)
