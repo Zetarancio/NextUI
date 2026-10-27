@@ -598,10 +598,12 @@ int main(int argc, char *argv[])
             []() -> std::any { return CFG_getRomsUseFolderBackground(); },
             [](const std::any &value) { CFG_setRomsUseFolderBackground(std::any_cast<bool>(value)); },
             []() { CFG_setRomsUseFolderBackground(CFG_DEFAULT_ROMSUSEFOLDERBACKGROUND);}});
-        appearanceItems.push_back(new MenuItem{ListItemType::Generic, "Show Quickswitcher UI", "Show/hide Quickswitcher UI elements.\nWhen hidden, will only draw background images.", {false, true}, on_off,
-            []() -> std::any{ return CFG_getShowQuickswitcherUI(); },
-            [](const std::any &value){ CFG_setShowQuickswitcherUI(std::any_cast<bool>(value)); },
-            []() { CFG_setShowQuickswitcherUI(CFG_DEFAULT_SHOWQUICKWITCHERUI);}});
+        if (deviceInfo.getPlatform() != DeviceInfo::my355) {
+            appearanceItems.push_back(new MenuItem{ListItemType::Generic, "Show Quickswitcher UI", "Show/hide Quickswitcher UI elements.\nWhen hidden, will only draw background images.", {false, true}, on_off,
+                []() -> std::any{ return CFG_getShowQuickswitcherUI(); },
+                [](const std::any &value){ CFG_setShowQuickswitcherUI(std::any_cast<bool>(value)); },
+                []() { CFG_setShowQuickswitcherUI(CFG_DEFAULT_SHOWQUICKWITCHERUI);}});
+        }
         appearanceItems.push_back(new MenuItem{ListItemType::Generic, "Input prompt style", "Select the style of input prompts.", input_prompt_style_values, input_prompt_style_labels,
             []() -> std::any{ return CFG_getInputPromptStyle(); },
             [](const std::any &value){ CFG_setInputPromptStyle(std::any_cast<int>(value)); },

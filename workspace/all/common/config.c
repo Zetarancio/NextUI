@@ -1016,7 +1016,11 @@ void CFG_setDefaultView(int view)
 
 bool CFG_getShowQuickswitcherUI(void)
 {
-    return settings.showQuickSwitcherUi;
+	/* Zlyme does not offer this switch. A saved 0 stays in the file
+	 * and the controls still draw. Other platforms keep the value. */
+	if (strcmp(PLATFORM, "my355") == 0)
+		return true;
+	return settings.showQuickSwitcherUi;
 }
 
 void CFG_setShowQuickswitcherUI(bool on)
