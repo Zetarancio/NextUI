@@ -453,6 +453,59 @@ namespace {
         Platform m_platform = UnknownPlatform;
     };
 }
+// The System row shows the saved zone and opens the picker. Left and
+// right do not change it. The stored index stays the full sorted
+// zone.tab index inside TIME_setCurrentTimezone.
+class ZlymeTimezoneRow : public AbstractMenuItem
+{
+    static std::any currentZone()
+    {
+        char *tz = TIME_getCurrentTimezone();
+        std::string s = tz ? tz : "UTC";
+        free(tz);
+        return s;
+    }
+
+public:
+    ZlymeTimezoneRow(MenuList *submenu)
+        : AbstractMenuItem(ListItemType::Generic, "Time zone",
+            "Common zones, or every zone. A saved name stays until you choose another.",
+            currentZone, nullptr,
+            []() { TIME_setCurrentTimezone("UTC"); },
+            DeferToSubmenu, submenu) {}
+
+    const std::any getValue() const override { return std::string(); }
+
+    const std::string getLabel() const override
+    {
+        if (!on_get)
+            return "UTC";
+        auto val = on_get();
+        if (!val.has_value())
+            return "UTC";
+        return std::any_cast<std::string>(val);
+    }
+
+    InputReactionHint handleInput(int &dirty) override
+    {
+        if (deferred) {
+            int closed = 0;
+            auto hint = submenu->handleInput(dirty, closed);
+            if (closed) {
+                defer(false);
+                dirty = 1;
+                return hint == Exit ? Exit : NoOp;
+            }
+            return hint;
+        }
+        if (PAD_justPressed(BTN_A) && on_confirm) {
+            dirty = 1;
+            return on_confirm(*this);
+        }
+        return Unhandled;
+    }
+};
+
 int main(int argc, char *argv[])
 {
     try
@@ -741,7 +794,60 @@ int main(int argc, char *argv[])
             []() { CFG_setClock24H(CFG_DEFAULT_CLOCK24H);}},
         });
 
-        if (tz_count > 0) {
+        if (tz_count > 0 && deviceInfo.getPlatform() == DeviceInfo::my355) {
+            auto tz_get = []() -> std::any {
+                char *tz = TIME_getCurrentTimezone();
+                std::string s = tz ? tz : "UTC";
+                free(tz);
+                return s;
+            };
+            auto tz_set = [](const std::any &value) {
+                TIME_setCurrentTimezone(std::any_cast<std::string>(value).c_str());
+            };
+            auto tz_reset = []() { TIME_setCurrentTimezone("UTC"); };
+            const char *common_src[] = {
+                "UTC",
+                "Europe/London", "Europe/Dublin", "Europe/Lisbon",
+                "Europe/Paris", "Europe/Madrid", "Europe/Rome",
+                "Europe/Berlin", "Europe/Amsterdam", "Europe/Warsaw",
+                "Europe/Athens", "Europe/Helsinki", "Europe/Moscow",
+                "America/New_York", "America/Chicago", "America/Denver",
+                "America/Los_Angeles", "America/Mexico_City", "America/Sao_Paulo",
+                "Asia/Dubai", "Asia/Kolkata", "Asia/Shanghai", "Asia/Hong_Kong",
+                "Asia/Singapore", "Asia/Tokyo", "Asia/Seoul",
+                "Australia/Sydney", "Pacific/Auckland",
+                "Africa/Cairo", "Africa/Johannesburg",
+            };
+            const std::string now = std::any_cast<std::string>(tz_get());
+            std::vector<std::any> common_values;
+            std::vector<std::string> common_labels;
+            bool have_now = false;
+            for (const char *z : common_src) {
+                bool known = false;
+                for (const auto &name : tz_labels)
+                    if (name == z) { known = true; break; }
+                if (!known)
+                    continue;
+                if (now == z)
+                    have_now = true;
+                common_values.push_back(std::string(z));
+                common_labels.push_back(z);
+            }
+            if (!have_now) {
+                common_values.push_back(now);
+                common_labels.push_back(now);
+            }
+            auto tzMenu = new MenuList(MenuItemType::Fixed, "Time zone", {
+                new MenuItem{ListItemType::Generic, "Common",
+                    "A short list. The zone you already saved is included.",
+                    common_values, common_labels, tz_get, tz_set, tz_reset},
+                new MenuItem{ListItemType::Generic, "All timezones",
+                    "Every zone, in the same order the clock already uses.",
+                    tz_values, tz_labels, tz_get, tz_set, tz_reset},
+            });
+            systemItems.push_back(new ZlymeTimezoneRow(tzMenu));
+        }
+        else if (tz_count > 0) {
             const bool zlyme_clock = deviceInfo.getPlatform() == DeviceInfo::my355;
             systemItems.push_back(
                 new MenuItem{ListItemType::Generic, "Time zone", "Your time zone",
