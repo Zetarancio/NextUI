@@ -458,6 +458,9 @@ namespace {
 // zone.tab index inside TIME_setCurrentTimezone.
 class ZlymeTimezoneRow : public AbstractMenuItem
 {
+    MenuItem *common_;
+    MenuItem *all_;
+
     static std::any currentZone()
     {
         char *tz = TIME_getCurrentTimezone();
@@ -467,12 +470,13 @@ class ZlymeTimezoneRow : public AbstractMenuItem
     }
 
 public:
-    ZlymeTimezoneRow(MenuList *submenu)
+    ZlymeTimezoneRow(MenuItem *common, MenuItem *all, MenuList *submenu)
         : AbstractMenuItem(ListItemType::Generic, "Time zone",
             "Common zones, or every zone. A saved name stays until you choose another.",
             currentZone, nullptr,
             []() { TIME_setCurrentTimezone("UTC"); },
-            DeferToSubmenu, submenu) {}
+            DeferToSubmenu, submenu),
+          common_(common), all_(all) {}
 
     const std::any getValue() const override { return std::string(); }
 
@@ -499,6 +503,10 @@ public:
             return hint;
         }
         if (PAD_justPressed(BTN_A) && on_confirm) {
+            if (common_)
+                common_->reselect();
+            if (all_)
+                all_->reselect();
             dirty = 1;
             return on_confirm(*this);
         }
@@ -837,15 +845,14 @@ int main(int argc, char *argv[])
                 common_values.push_back(now);
                 common_labels.push_back(now);
             }
-            auto tzMenu = new MenuList(MenuItemType::Fixed, "Time zone", {
-                new MenuItem{ListItemType::Generic, "Common",
-                    "A short list. The zone you already saved is included.",
-                    common_values, common_labels, tz_get, tz_set, tz_reset},
-                new MenuItem{ListItemType::Generic, "All timezones",
-                    "Every zone, in the same order the clock already uses.",
-                    tz_values, tz_labels, tz_get, tz_set, tz_reset},
-            });
-            systemItems.push_back(new ZlymeTimezoneRow(tzMenu));
+            auto *commonItem = new MenuItem{ListItemType::Generic, "Common",
+                "A short list. The zone you already saved is included.",
+                common_values, common_labels, tz_get, tz_set, tz_reset};
+            auto *allItem = new MenuItem{ListItemType::Generic, "All timezones",
+                "Every zone, in the same order the clock already uses.",
+                tz_values, tz_labels, tz_get, tz_set, tz_reset};
+            auto *tzMenu = new MenuList(MenuItemType::Fixed, "Time zone", {commonItem, allItem});
+            systemItems.push_back(new ZlymeTimezoneRow(commonItem, allItem, tzMenu));
         }
         else if (tz_count > 0) {
             const bool zlyme_clock = deviceInfo.getPlatform() == DeviceInfo::my355;
