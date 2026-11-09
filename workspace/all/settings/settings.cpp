@@ -562,7 +562,11 @@ public:
     InputReactionHint handleInput(int &dirty, int &quit) override
     {
         resync();
-        return MenuList::handleInput(dirty, quit);
+        InputReactionHint hint = MenuList::handleInput(dirty, quit);
+        // The short list may have saved a new name. The full row's
+        // label is its index, so reread after the write and before draw.
+        resync();
+        return hint;
     }
 };
 
