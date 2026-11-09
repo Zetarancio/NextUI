@@ -20,8 +20,12 @@ def main():
         return fail("the timezone row is gone")
     if 'new ZlymeTimezoneRow' not in settings:
         return fail("my355 does not open the timezone row")
+    if "class CommonZoneItem" not in settings or "class TimezonePicker" not in settings:
+        return fail("the short list and the full list are not separate")
     if '"All timezones"' not in settings or '"Common"' not in settings:
         return fail("common and full lists are not both present")
+    if "names.push_back(now)" not in settings or "all->reselect()" not in settings:
+        return fail("a later uncommon choice is not kept on both lists")
     if settings.count("TIME_setCurrentTimezone") < 3:
         return fail("choices are not saved by zone name")
     if "CFG_setCurrentTimezone" in settings:

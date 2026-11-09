@@ -453,30 +453,131 @@ namespace {
         Platform m_platform = UnknownPlatform;
     };
 }
+static std::string zlymeSavedZone()
+{
+    char *tz = TIME_getCurrentTimezone();
+    std::string s = tz ? tz : "UTC";
+    free(tz);
+    return s;
+}
+
+// The short list is not the stored index. A zone chosen from the full
+// list is appended here so the short row keeps showing that name, and
+// the next left or right moves from it.
+class CommonZoneItem : public AbstractMenuItem
+{
+    mutable std::vector<std::string> names;
+    mutable int idx{-1};
+
+    void sync() const
+    {
+        const std::string now = zlymeSavedZone();
+        if (std::find(names.begin(), names.end(), now) == names.end())
+            names.push_back(now);
+        for (int i = 0; i < (int)names.size(); i++) {
+            if (names[i] == now) {
+                idx = i;
+                return;
+            }
+        }
+        idx = 0;
+    }
+
+public:
+    CommonZoneItem(std::vector<std::string> names, ValueResetCallback on_reset)
+        : AbstractMenuItem(ListItemType::Generic, "Common",
+            "A short list. The zone you already saved is included.",
+            nullptr, nullptr, on_reset),
+          names(std::move(names))
+    {
+        sync();
+    }
+
+    const std::any getValue() const override
+    {
+        sync();
+        if (idx < 0 || idx >= (int)names.size())
+            return std::string("UTC");
+        return names[idx];
+    }
+
+    const std::string getLabel() const override
+    {
+        sync();
+        if (idx < 0 || idx >= (int)names.size())
+            return "UTC";
+        return names[idx];
+    }
+
+    InputReactionHint handleInput(int &dirty) override
+    {
+        int step = 0;
+        if (PAD_justRepeated(BTN_L1))
+            step = -10;
+        else if (PAD_justRepeated(BTN_LEFT))
+            step = -1;
+        else if (PAD_justRepeated(BTN_R1))
+            step = 10;
+        else if (PAD_justRepeated(BTN_RIGHT))
+            step = 1;
+        else if (PAD_justPressed(BTN_A))
+            return NoOp;
+        else
+            return Unhandled;
+
+        sync();
+        if (names.empty() || idx < 0)
+            return NoOp;
+        const int n = (int)names.size();
+        const int hop = step > 0 ? step % n : (-step) % n;
+        const int next = step > 0 ? (idx + hop) % n : (idx + n - hop) % n;
+        if (next == idx)
+            return NoOp;
+        TIME_setCurrentTimezone(names[next].c_str());
+        sync();
+        dirty = 1;
+        return NoOp;
+    }
+};
+
+// The full list contains every canonical name, so rereading the saved
+// zone before input cannot land on the wrong neighbor.
+class TimezonePicker : public MenuList
+{
+    MenuItem *all;
+
+    void resync()
+    {
+        if (all)
+            all->reselect();
+    }
+
+public:
+    TimezonePicker(MenuItem *all_item, std::vector<AbstractMenuItem *> items)
+        : MenuList(MenuItemType::Fixed, "Time zone", std::move(items)),
+          all(all_item) {}
+
+    void onShow() override { resync(); }
+
+    InputReactionHint handleInput(int &dirty, int &quit) override
+    {
+        resync();
+        return MenuList::handleInput(dirty, quit);
+    }
+};
+
 // The System row shows the saved zone and opens the picker. Left and
 // right do not change it. The stored index stays the full sorted
 // zone.tab index inside TIME_setCurrentTimezone.
 class ZlymeTimezoneRow : public AbstractMenuItem
 {
-    MenuItem *common_;
-    MenuItem *all_;
-
-    static std::any currentZone()
-    {
-        char *tz = TIME_getCurrentTimezone();
-        std::string s = tz ? tz : "UTC";
-        free(tz);
-        return s;
-    }
-
 public:
-    ZlymeTimezoneRow(MenuItem *common, MenuItem *all, MenuList *submenu)
+    ZlymeTimezoneRow(MenuList *submenu)
         : AbstractMenuItem(ListItemType::Generic, "Time zone",
             "Common zones, or every zone. A saved name stays until you choose another.",
-            currentZone, nullptr,
+            []() -> std::any { return zlymeSavedZone(); }, nullptr,
             []() { TIME_setCurrentTimezone("UTC"); },
-            DeferToSubmenu, submenu),
-          common_(common), all_(all) {}
+            DeferToSubmenu, submenu) {}
 
     const std::any getValue() const override { return std::string(); }
 
@@ -503,10 +604,6 @@ public:
             return hint;
         }
         if (PAD_justPressed(BTN_A) && on_confirm) {
-            if (common_)
-                common_->reselect();
-            if (all_)
-                all_->reselect();
             dirty = 1;
             return on_confirm(*this);
         }
@@ -803,12 +900,7 @@ int main(int argc, char *argv[])
         });
 
         if (tz_count > 0 && deviceInfo.getPlatform() == DeviceInfo::my355) {
-            auto tz_get = []() -> std::any {
-                char *tz = TIME_getCurrentTimezone();
-                std::string s = tz ? tz : "UTC";
-                free(tz);
-                return s;
-            };
+            auto tz_get = []() -> std::any { return zlymeSavedZone(); };
             auto tz_set = [](const std::any &value) {
                 TIME_setCurrentTimezone(std::any_cast<std::string>(value).c_str());
             };
@@ -826,8 +918,7 @@ int main(int argc, char *argv[])
                 "Australia/Sydney", "Pacific/Auckland",
                 "Africa/Cairo", "Africa/Johannesburg",
             };
-            const std::string now = std::any_cast<std::string>(tz_get());
-            std::vector<std::any> common_values;
+            const std::string now = zlymeSavedZone();
             std::vector<std::string> common_labels;
             bool have_now = false;
             for (const char *z : common_src) {
@@ -838,21 +929,16 @@ int main(int argc, char *argv[])
                     continue;
                 if (now == z)
                     have_now = true;
-                common_values.push_back(std::string(z));
                 common_labels.push_back(z);
             }
-            if (!have_now) {
-                common_values.push_back(now);
+            if (!have_now)
                 common_labels.push_back(now);
-            }
-            auto *commonItem = new MenuItem{ListItemType::Generic, "Common",
-                "A short list. The zone you already saved is included.",
-                common_values, common_labels, tz_get, tz_set, tz_reset};
+            auto *commonItem = new CommonZoneItem(common_labels, tz_reset);
             auto *allItem = new MenuItem{ListItemType::Generic, "All timezones",
                 "Every zone, in the same order the clock already uses.",
                 tz_values, tz_labels, tz_get, tz_set, tz_reset};
-            auto *tzMenu = new MenuList(MenuItemType::Fixed, "Time zone", {commonItem, allItem});
-            systemItems.push_back(new ZlymeTimezoneRow(commonItem, allItem, tzMenu));
+            auto *tzMenu = new TimezonePicker(allItem, {commonItem, allItem});
+            systemItems.push_back(new ZlymeTimezoneRow(tzMenu));
         }
         else if (tz_count > 0) {
             const bool zlyme_clock = deviceInfo.getPlatform() == DeviceInfo::my355;
