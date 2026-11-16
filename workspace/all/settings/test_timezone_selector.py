@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Source checks for the Settings timezone row.
+"""Source checks for the single my355 timezone row.
 
-This does not draw the menu and does not read a timezone file. The
-executable check of the in-memory name is test_timezone_state.cpp.
+This does not draw the menu and does not read a timezone file.
 """
 import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SETTINGS = ROOT / "all" / "settings" / "settings.cpp"
-HEADER = ROOT / "all" / "settings" / "zlymezone.hpp"
 PLATFORM = ROOT / "my355" / "platform" / "platform.c"
 
 
@@ -24,53 +22,41 @@ def between(text, start, end):
 
 def main():
     settings = SETTINGS.read_text()
-    header = HEADER.read_text()
     platform = PLATFORM.read_text()
-    if "ZlymeTimezoneRow" not in settings:
-        return fail("the timezone row is gone")
-    if 'new ZlymeTimezoneRow' not in settings:
-        return fail("my355 does not open the timezone row")
-    if "class CommonZoneItem" not in settings or "class TimezonePicker" not in settings:
-        return fail("the short list and the full list are not separate")
-    if '"All timezones"' not in settings or '"Common"' not in settings:
-        return fail("common and full lists are not both present")
-    if "names.push_back(saved)" not in header or "all->reselect()" not in settings:
-        return fail("a later uncommon choice is not kept on both lists")
-    if settings.count("TIME_setCurrentTimezone") < 3:
-        return fail("choices are not saved by zone name")
+    for gone in ("class CommonZoneItem", "class TimezonePicker", "class ZlymeTimezoneRow",
+                 '"All timezones"', '"Common"', "zlyme_common", "zlyme_all"):
+        if gone in settings:
+            return fail("the nested timezone picker is still present: " + gone)
+    if settings.count('Generic, "Time zone"') != 2:
+        return fail("my355 and the other platforms do not each have one Time zone row")
+    row = between(settings, "deviceInfo.getPlatform() == DeviceInfo::my355) {", "else if (tz_count > 0)")
+    if "new MenuItem" not in row:
+        return fail("my355 does not use the ordinary menu row")
+    if "timezone-representatives.txt" not in row:
+        return fail("my355 does not read the representative list")
+    if "zlyme_zone_pull()" not in row:
+        return fail("my355 does not read the saved zone at startup")
+    if row.count("TIME_getCurrentTimezone") != 0:
+        return fail("the my355 row reads the saved zone itself")
+    if "if (zone == zlyme_zone.label())" not in row:
+        return fail("an unchanged zone is written again")
+    if "TIME_setCurrentTimezone(zone.c_str())" not in row:
+        return fail("a choice does not save the canonical name")
+    if "shown_values.push_back(now)" not in row:
+        return fail("a saved uncommon zone is not kept")
+    if "zlyme_zone_reset" not in row:
+        return fail("reset is not UTC")
+    if settings.count("zlymeReadSavedZone") != 2:
+        return fail("the saved zone is not read from one function")
     if "CFG_setCurrentTimezone" in settings:
         return fail("settings stores a timezone index itself")
-    if "zlyme_zone.label()" not in header and "const std::string &label()" not in header:
-        return fail("the shown name is not an in-memory label")
-    if "TIME_getCurrentTimezone" in header:
-        return fail("the label helper reads the saved zone")
-
-    common = between(settings, "class CommonZoneItem", "class TimezonePicker")
-    draw = between(common, "const std::any getValue()", "InputReactionHint handleInput")
-    if "TIME_getCurrentTimezone" in draw or "zlymeReadSavedZone" in draw or "zlyme_zone_pull" in draw:
-        return fail("the short row reads the saved zone while drawing")
-    row = between(settings, "class ZlymeTimezoneRow", "int main")
-    row_draw = between(row, "const std::any getValue()", "InputReactionHint handleInput")
-    if "TIME_getCurrentTimezone" in row_draw or "zlymeReadSavedZone" in row_draw or "zlyme_zone_pull" in row_draw:
-        return fail("the parent row reads the saved zone while drawing")
-    handler = row.split("handleInput", 1)[1]
-    if "TIME_setCurrentTimezone" in handler or "zlyme_zone_remember" in handler:
-        return fail("opening or moving on the row writes a timezone")
-    if "zlyme_zone_reset" not in row:
-        return fail("reset is not the shared UTC callback")
-    picker = between(settings, "class TimezonePicker", "class ZlymeTimezoneRow")
-    if "void onShow() override { zlyme_zone_pull(); }" not in picker:
-        return fail("opening the picker does not refresh the saved name")
-    showed, _, later = picker.partition("handleInput")
-    if "zlyme_zone_pull" not in showed or "zlyme_zone_pull" in later or "TIME_getCurrentTimezone" in later:
-        return fail("input on the picker reads the saved zone")
-    calls = settings.split("static void zlyme_zone_pull();", 1)[1].count("zlyme_zone_pull();")
-    if calls != 2:
-        return fail("the saved zone is not read only at startup and when the picker opens")
-    if "zlymeReadSavedZone" in between(settings, "static void zlyme_zone_remember", "static void zlyme_zone_pull"):
-        return fail("a choice rereads the saved zone")
     if 'TIME_setCurrentTimezone("UTC")' not in settings:
         return fail("reset is not UTC")
+    other = between(settings, "else if (tz_count > 0)", "Haptic feedback")
+    if "tz_values, tz_labels" not in other:
+        return fail("other platforms lost the full timezone list")
+    if "TIME_getCurrentTimezone" not in other:
+        return fail("other platforms no longer read their own zone")
     if "qsort(cached_timezones" not in platform:
         return fail("the canonical list is no longer sorted in place")
     if "CFG_setCurrentTimezone(tz_index)" not in platform:
