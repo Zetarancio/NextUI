@@ -18,6 +18,7 @@
 #include "api.h"
 #include "pad_policy.h"
 #include "utils.h"
+#include "wifi_publish.h"
 
 #include "scaler.h"
 #include <time.h>
@@ -483,16 +484,6 @@ void PLAT_getGPUSpeed() {
 	perf.gpu_speed = 42; // MHz
 }
 
-static struct WIFI_connection connection = {
-	.valid = false,
-	.freq = -1,
-	.link_speed = -1,
-	.noise = -1,
-	.rssi = -1,
-	.ip = {0},
-	.ssid = {0},
-};
-
 static inline void connection_reset(struct WIFI_connection *connection_info)
 {
 	connection_info->valid = false;
@@ -506,16 +497,40 @@ static inline void connection_reset(struct WIFI_connection *connection_info)
 
 /* Written by the battery thread, read while the menu draws. */
 static SDL_atomic_t bluetoothConnected;
+/* category + 1. Zero is SIGNAL_STRENGTH_OFF before the first poll. */
+static SDL_atomic_t wifiStrength;
+
+_Static_assert(SIGNAL_STRENGTH_OFF == -1, "wifi off value moved");
+_Static_assert(SIGNAL_STRENGTH_DISCONNECTED == 0, "wifi disconnected value moved");
+_Static_assert(SIGNAL_STRENGTH_LOW == 1, "wifi low value moved");
+_Static_assert(SIGNAL_STRENGTH_MED == 2, "wifi medium value moved");
+_Static_assert(SIGNAL_STRENGTH_HIGH == 3, "wifi high value moved");
 
 void PLAT_getNetworkStatus(int* is_online)
 {
-	if(WIFI_enabled())
-		WIFI_connectionInfo(&connection);
+	struct WIFI_connection info = {
+		.valid = false,
+		.freq = -1,
+		.link_speed = -1,
+		.noise = -1,
+		.rssi = -1,
+		.ip = {0},
+		.ssid = {0},
+	};
+	int enabled = WIFI_enabled();
+	int category = SIGNAL_STRENGTH_OFF;
+
+	if(enabled)
+		WIFI_connectionInfo(&info);
 	else
-		connection_reset(&connection);
+		connection_reset(&info);
 	
 	if(is_online)
-		*is_online = (connection.valid && connection.ssid[0] != '\0');
+		*is_online = (info.valid && info.ssid[0] != '\0');
+
+	if(enabled)
+		category = zlyme_wifi_category(info.valid, info.rssi);
+	SDL_AtomicSet(&wifiStrength, zlyme_wifi_store(category));
 	
 	if(BT_enabled()) {
 		SDL_AtomicSet(&bluetoothConnected, PLAT_bluetoothConnected() ? 1 : 0);
@@ -859,16 +874,8 @@ bool PLAT_supportsColorTemperature(void)
 }
 
 ConnectionStrength PLAT_connectionStrength(void) {
-	if(!WIFI_enabled() || !connection.valid || connection.rssi == -1)
-		return SIGNAL_STRENGTH_OFF;
-	else if (connection.rssi == 0)
-		return SIGNAL_STRENGTH_DISCONNECTED;
-	else if (connection.rssi >= -60)
-		return SIGNAL_STRENGTH_HIGH;
-	else if (connection.rssi >= -70)
-		return SIGNAL_STRENGTH_MED;
-	else
-		return SIGNAL_STRENGTH_LOW;
+	return (ConnectionStrength)zlyme_wifi_visible(WIFI_enabled(),
+		SDL_AtomicGet(&wifiStrength));
 }
 
 //////////////////////////////////////////////

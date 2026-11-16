@@ -992,14 +992,30 @@ void CFG_setGameArtWidth(double zeroToOne)
     CFG_sync();
 }
 
+/* The battery thread reads this while the UI writes it. The field
+ * stays a bool so the settings file layout does not move. CFG_init
+ * copies the whole settings object before that thread exists. */
+_Static_assert(__atomic_always_lock_free(sizeof(settings.wifi), &settings.wifi),
+               "wifi flag is not a lock-free atomic");
+
+static bool wifi_load(void)
+{
+    return __atomic_load_n(&settings.wifi, __ATOMIC_RELAXED);
+}
+
+static void wifi_store(bool on)
+{
+    __atomic_store_n(&settings.wifi, on, __ATOMIC_RELAXED);
+}
+
 bool CFG_getWifi(void)
 {
-    return settings.wifi;
+    return wifi_load();
 }
 
 void CFG_setWifi(bool on)
 {
-    settings.wifi = on;
+    wifi_store(on);
     CFG_sync();
 }
 
@@ -1703,7 +1719,7 @@ void CFG_sync(void)
     fprintf(file, "fn2action=%s\n", settings.fnAction[1]);
     fprintf(file, "fn3action=%s\n", settings.fnAction[2]);
     fprintf(file, "artWidth=%i\n", (int)(settings.gameArtWidth * 100));
-    fprintf(file, "wifi=%i\n", settings.wifi);
+    fprintf(file, "wifi=%i\n", (int)wifi_load());
     fprintf(file, "defaultView=%i\n", settings.defaultView);
     fprintf(file, "quickSwitcherUi=%i\n", settings.showQuickSwitcherUi);
     fprintf(file, "wifiDiagnostics=%i\n", settings.wifiDiagnostics);
@@ -1780,7 +1796,7 @@ void CFG_print(void)
     printf("\t\"fn2action\": \"%s\",\n", settings.fnAction[1]);
     printf("\t\"fn3action\": \"%s\",\n", settings.fnAction[2]);
     printf("\t\"artWidth\": %i,\n", (int)(settings.gameArtWidth * 100));
-    printf("\t\"wifi\": %i,\n", settings.wifi);
+    printf("\t\"wifi\": %i,\n", (int)wifi_load());
     printf("\t\"defaultView\": %i,\n", settings.defaultView);
     printf("\t\"quickSwitcherUi\": %i,\n", settings.showQuickSwitcherUi);
     printf("\t\"wifiDiagnostics\": %i,\n", settings.wifiDiagnostics);
