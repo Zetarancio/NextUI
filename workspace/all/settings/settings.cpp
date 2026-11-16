@@ -816,7 +816,7 @@ int main(int argc, char *argv[])
             }
             systemItems.push_back(
                 new MenuItem{ListItemType::Generic, "Time zone",
-                "Left and right move through representative zones. A saved zone stays until you choose another.",
+                "Left/right: change zone.",
                 shown_values, shown_labels,
                 []() -> std::any { return zlyme_zone.label(); },
                 [](const std::any &value) {
