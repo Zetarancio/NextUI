@@ -10,4 +10,8 @@ if ! gcc -std=c11 -Wall -Wextra -Werror -pthread -fsanitize=thread \
 	echo "bt-cache-race: thread sanitizer did not link" >&2
 	exit 1
 fi
-"$work/race"
+i=0
+while [ "$i" -lt 20 ]; do
+	"$work/race"
+	i=$((i + 1))
+done
