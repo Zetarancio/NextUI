@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <sys/time.h>
 #include <sys/wait.h>
@@ -977,27 +978,64 @@ char* findFileInDir(const char *directory, const char *filename) {
     return full_path;
 }
 
+/* The direct child and its process group. pid -1 means already reaped. */
+struct cmd_child {
+	pid_t pid;
+	int read_fd;
+};
+
+static void cmd_child_cleanup(void *arg)
+{
+	struct cmd_child *child = arg;
+
+	if (child->pid > 1) {
+		/* Group id is the child's pid only after setpgid(0, 0). */
+		kill(-child->pid, SIGKILL);
+		kill(child->pid, SIGKILL);
+		for (;;) {
+			pid_t got = waitpid(child->pid, NULL, 0);
+			if (got == child->pid)
+				break;
+			if (got < 0 && errno != EINTR)
+				break;
+		}
+		child->pid = -1;
+	}
+	if (child->read_fd >= 0) {
+		close(child->read_fd);
+		child->read_fd = -1;
+	}
+}
+
 int runCmdTimeout(const char *cmd, char *output, size_t output_len, int timeout_ms)
 {
 	int pipefd[2];
-	pid_t pid;
+	struct cmd_child child;
 	struct timespec start, now;
 	int status = 0;
 	int done = 0;
+	int result = -1;
+	int old_cancel = PTHREAD_CANCEL_ENABLE;
 	size_t total = 0;
 
+	child.pid = -1;
+	child.read_fd = -1;
 	if (!cmd || timeout_ms <= 0)
 		return -1;
 	if (pipe(pipefd) < 0)
 		return -1;
 
-	pid = fork();
-	if (pid < 0) {
+	/* Cancel stays deferred. Disable it only so the child cannot exist
+	 * before its cleanup handler is registered. */
+	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old_cancel);
+	child.pid = fork();
+	if (child.pid < 0) {
 		close(pipefd[0]);
 		close(pipefd[1]);
+		pthread_setcancelstate(old_cancel, NULL);
 		return -1;
 	}
-	if (pid == 0) {
+	if (child.pid == 0) {
 		setpgid(0, 0);
 		close(pipefd[0]);
 		dup2(pipefd[1], STDOUT_FILENO);
@@ -1008,14 +1046,18 @@ int runCmdTimeout(const char *cmd, char *output, size_t output_len, int timeout_
 	}
 
 	close(pipefd[1]);
-	setpgid(pid, pid);
+	child.read_fd = pipefd[0];
+	setpgid(child.pid, child.pid);
+	pthread_cleanup_push(cmd_child_cleanup, &child);
+	pthread_setcancelstate(old_cancel, NULL);
+
 	if (output && output_len)
 		output[0] = '\0';
 
 	clock_gettime(CLOCK_MONOTONIC, &start);
 	while (1) {
 		int elapsed, remain;
-		struct pollfd pfd = { .fd = pipefd[0], .events = POLLIN };
+		struct pollfd pfd = { .fd = child.read_fd, .events = POLLIN };
 		pid_t waited;
 
 		clock_gettime(CLOCK_MONOTONIC, &now);
@@ -1025,10 +1067,11 @@ int runCmdTimeout(const char *cmd, char *output, size_t output_len, int timeout_
 		if (remain <= 0)
 			break;
 
-		if (poll(&pfd, 1, remain > 50 ? 50 : remain) > 0 &&
+		if (child.read_fd >= 0 &&
+		    poll(&pfd, 1, remain > 50 ? 50 : remain) > 0 &&
 		    (pfd.revents & POLLIN)) {
 			char buf[256];
-			ssize_t n = read(pipefd[0], buf, sizeof buf);
+			ssize_t n = read(child.read_fd, buf, sizeof buf);
 			if (n > 0 && output && output_len > 1) {
 				size_t room = output_len - 1 - total;
 				size_t cpy = (size_t)n < room ? (size_t)n : room;
@@ -1038,20 +1081,22 @@ int runCmdTimeout(const char *cmd, char *output, size_t output_len, int timeout_
 			}
 		}
 
-		waited = waitpid(pid, &status, WNOHANG);
-		if (waited == pid) {
+		waited = waitpid(child.pid, &status, WNOHANG);
+		if (waited == child.pid) {
 			done = 1;
+			child.pid = -1;
 			break;
 		}
 	}
 
-	close(pipefd[0]);
-	if (!done) {
-		kill(-pid, SIGKILL);
-		waitpid(pid, &status, 0);
-		return 124;
+	if (done) {
+		if (WIFEXITED(status))
+			result = WEXITSTATUS(status);
+		else
+			result = -1;
+	} else {
+		result = 124;
 	}
-	if (WIFEXITED(status))
-		return WEXITSTATUS(status);
-	return -1;
+	pthread_cleanup_pop(1);
+	return result;
 }
