@@ -2377,13 +2377,11 @@ int GFX_blitHardwareGroup(SDL_Surface *dst, int show_setting)
 	{
 		ConnectionStrength strength = PLAT_connectionStrength();
 		int show_wifi = strength > SIGNAL_STRENGTH_OFF;
-		// no need to handle in PLAT_updateNetworkStatus,
-		// this one is async anyway
-		/* A radio link and the playing sink are different facts.
-		 * The rune is the link. The audio glyph is any non-default
-		 * sink, including HDMI and A2DP. Upstream hides that glyph
-		 * when it is the only extra mark. Keep it visible. */
-		int show_bt = BT_isConnected();
+		/* The rune is the link cached by the network poll, not a
+		 * directory read on this draw. The audio glyph is any
+		 * non-default sink, including HDMI and A2DP. Upstream hides
+		 * that glyph when it is the only extra mark. Keep it visible. */
+		int show_bt = PLAT_btIsConnected();
 		int show_external_audio = GetAudioSink() != AUDIO_SINK_DEFAULT;
 		bool show_clock = CFG_getShowClock();
 		SDL_Rect battery_rect = asset_rects[ASSET_BATTERY];
