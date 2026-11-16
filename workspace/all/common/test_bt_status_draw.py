@@ -50,6 +50,15 @@ def main():
         return fail("the cache is not an SDL atomic")
     if "static bool bluetoothConnected" in platform:
         return fail("the cache is still a plain bool")
+    config = (ROOT / "all" / "common" / "config.c").read_text()
+    if "__atomic_load_n(&settings.bluetooth, __ATOMIC_RELAXED)" not in config:
+        return fail("the enable flag is read without an atomic load")
+    if "__atomic_store_n(&settings.bluetooth, on, __ATOMIC_RELAXED)" not in config:
+        return fail("the enable flag is written without an atomic store")
+    if 'fprintf(file, "bluetooth=%i\\n", (int)bluetooth_load());' not in config:
+        return fail("the settings file does not keep bluetooth=%i")
+    if 'fprintf(file, "bluetooth=%i\\n", settings.bluetooth)' in config:
+        return fail("the settings file reads the flag unsynchronized")
     for other in ("tg5040", "tg5050", "h700"):
         text = (ROOT / other / "platform" / "platform.c").read_text()
         body = between(text, "bool PLAT_btIsConnected(void)", "ConnectionStrength")

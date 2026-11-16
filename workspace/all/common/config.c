@@ -1040,14 +1040,30 @@ void CFG_setWifiDiagnostics(bool on)
     CFG_sync();
 }
 
+/* The battery thread reads this while the UI writes it. The field
+ * stays a bool so the settings file layout does not move. CFG_init
+ * copies the whole settings object before that thread exists. */
+_Static_assert(__atomic_always_lock_free(sizeof(settings.bluetooth), &settings.bluetooth),
+               "bluetooth flag is not a lock-free atomic");
+
+static bool bluetooth_load(void)
+{
+    return __atomic_load_n(&settings.bluetooth, __ATOMIC_RELAXED);
+}
+
+static void bluetooth_store(bool on)
+{
+    __atomic_store_n(&settings.bluetooth, on, __ATOMIC_RELAXED);
+}
+
 bool CFG_getBluetooth(void)
 {
-    return settings.bluetooth;
+    return bluetooth_load();
 }
 
 void CFG_setBluetooth(bool on)
 {
-    settings.bluetooth = on;
+    bluetooth_store(on);
     CFG_sync();
 }
 
@@ -1691,7 +1707,7 @@ void CFG_sync(void)
     fprintf(file, "defaultView=%i\n", settings.defaultView);
     fprintf(file, "quickSwitcherUi=%i\n", settings.showQuickSwitcherUi);
     fprintf(file, "wifiDiagnostics=%i\n", settings.wifiDiagnostics);
-    fprintf(file, "bluetooth=%i\n", settings.bluetooth);
+    fprintf(file, "bluetooth=%i\n", (int)bluetooth_load());
     fprintf(file, "btDiagnostics=%i\n", settings.bluetoothDiagnostics);
     fprintf(file, "btMaxRate=%i\n", settings.bluetoothSamplerateLimit);
     fprintf(file, "ntp=%i\n", settings.ntp);
@@ -1768,7 +1784,7 @@ void CFG_print(void)
     printf("\t\"defaultView\": %i,\n", settings.defaultView);
     printf("\t\"quickSwitcherUi\": %i,\n", settings.showQuickSwitcherUi);
     printf("\t\"wifiDiagnostics\": %i,\n", settings.wifiDiagnostics);
-    printf("\t\"bluetooth\": %i,\n", settings.bluetooth);
+    printf("\t\"bluetooth\": %i,\n", (int)bluetooth_load());
     printf("\t\"btDiagnostics\": %i,\n", settings.bluetoothDiagnostics);
     printf("\t\"btMaxRate\": %i,\n", settings.bluetoothSamplerateLimit);
     printf("\t\"ntp\": %i,\n", settings.ntp);
