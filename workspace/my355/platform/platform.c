@@ -504,7 +504,8 @@ static inline void connection_reset(struct WIFI_connection *connection_info)
 	*connection_info->ssid = '\0';
 }
 
-static bool bluetoothConnected = false;
+/* Written by the battery thread, read while the menu draws. */
+static SDL_atomic_t bluetoothConnected;
 
 void PLAT_getNetworkStatus(int* is_online)
 {
@@ -517,10 +518,10 @@ void PLAT_getNetworkStatus(int* is_online)
 		*is_online = (connection.valid && connection.ssid[0] != '\0');
 	
 	if(BT_enabled()) {
-		bluetoothConnected = PLAT_bluetoothConnected();
+		SDL_AtomicSet(&bluetoothConnected, PLAT_bluetoothConnected() ? 1 : 0);
 	}
 	else
-		bluetoothConnected = false;
+		SDL_AtomicSet(&bluetoothConnected, 0);
 }
 
 static void psy_read(const char *dir, const char *name, char *buf, size_t n)
@@ -849,7 +850,7 @@ bool PLAT_btIsConnected(void)
 {
 	/* CFG is cleared before the radio thread finishes, so a cached
 	 * true must not keep the headset icon up. */
-	return BT_enabled() && bluetoothConnected;
+	return BT_enabled() && SDL_AtomicGet(&bluetoothConnected);
 }
 
 bool PLAT_supportsColorTemperature(void)

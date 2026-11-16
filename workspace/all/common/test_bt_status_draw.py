@@ -39,15 +39,22 @@ def main():
     if 'opendir("/sys/class/bluetooth")' not in bt:
         return fail("the live check no longer reads sysfs")
     helper = between(platform, "bool PLAT_btIsConnected(void)", "bool PLAT_supportsColorTemperature")
-    if "return BT_enabled() && bluetoothConnected;" not in helper:
+    if "return BT_enabled() && SDL_AtomicGet(&bluetoothConnected);" not in helper:
         return fail("Bluetooth off does not force the rune off")
     status = between(platform, "void PLAT_getNetworkStatus", "static void psy_read")
-    if "bluetoothConnected = PLAT_bluetoothConnected();" not in status:
-        return fail("the poll does not refresh the cache")
-    if "bluetoothConnected = false;" not in status:
+    if "SDL_AtomicSet(&bluetoothConnected, PLAT_bluetoothConnected() ? 1 : 0);" not in status:
+        return fail("the poll does not publish the cache")
+    if "SDL_AtomicSet(&bluetoothConnected, 0);" not in status:
         return fail("a disabled radio does not clear the cache")
-    if "static bool bluetoothConnected = false;" not in platform:
-        return fail("the cache does not start disconnected")
+    if "static SDL_atomic_t bluetoothConnected;" not in platform:
+        return fail("the cache is not an SDL atomic")
+    if "static bool bluetoothConnected" in platform:
+        return fail("the cache is still a plain bool")
+    for other in ("tg5040", "tg5050", "h700"):
+        text = (ROOT / other / "platform" / "platform.c").read_text()
+        body = between(text, "bool PLAT_btIsConnected(void)", "ConnectionStrength")
+        if "return bluetoothConnected;" not in body:
+            return fail(other + " no longer uses its own cache")
     if "SDL_AtomicSet(&pwr.poll_network_status, 1);" not in api:
         return fail("the frontend poll is not started")
     if "SDL_AtomicSet(&pwr.update_secs, 5);" not in api:
